@@ -1,0 +1,3 @@
+-- Khung dự án FilmLink: khởi tạo lịch sử migration.
+-- Chưa có bảng nghiệp vụ. Mỗi domain thêm bảng bằng migration riêng theo quy ước
+-- V<yyyyMMdd>_<HHmm>__<domain>_<mo_ta>.sql (xem README).
