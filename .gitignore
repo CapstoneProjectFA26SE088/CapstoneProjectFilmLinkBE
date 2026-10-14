@@ -34,3 +34,7 @@ build/
 
 ### Local config & generated ###
 effective-pom
+
+
+
+.env

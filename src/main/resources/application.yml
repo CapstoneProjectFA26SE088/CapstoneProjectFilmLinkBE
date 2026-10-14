@@ -1,4 +1,8 @@
+server:
+  port: ${SERVER_PORT:8386}
 spring:
+  config:
+    import: optional:file:.env[.properties]
   application:
     name: filmlink-backend
   datasource:
@@ -9,8 +13,14 @@ spring:
     hibernate:
       ddl-auto: validate
     open-in-view: false
+    properties:
+      hibernate:
+        default_schema: ${DB_SCHEMA:filmlink_local}
   flyway:
     enabled: true
+    schemas: ${DB_SCHEMA:filmlink_local}
+    default-schema: ${DB_SCHEMA:filmlink_local}
+    create-schemas: true
   mvc:
     problemdetails:
       enabled: true
@@ -22,3 +32,6 @@ springdoc:
   swagger-ui:
     enabled: ${SWAGGER_ENABLED:true}
     path: /swagger-ui.html
+jwt:
+  secret: ${JWT_SECRET}
+  expiration: ${JWT_EXPIRATION:86400000}
