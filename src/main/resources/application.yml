@@ -1,9 +1,14 @@
+server:
+  port: ${SERVER_PORT:8386}
+
 # Schema PostgreSQL của môi trường hiện tại: khai báo DUY NHẤT ở đây (test ghi đè trong application-test.yml).
 filmlink:
   db:
     schema: ${DB_SCHEMA:public}
 
 spring:
+  config:
+    import: optional:file:.env[.properties]
   application:
     name: filmlink-backend
   datasource:
@@ -29,8 +34,6 @@ spring:
   mvc:
     problemdetails:
       enabled: true
-  config:
-    import: optional:file:.env[.properties]
 
 springdoc:
   api-docs:
@@ -39,3 +42,7 @@ springdoc:
   swagger-ui:
     enabled: ${SWAGGER_ENABLED:true}
     path: /swagger-ui.html
+
+jwt:
+  secret: ${JWT_SECRET}
+  expiration: ${JWT_EXPIRATION:86400000}
