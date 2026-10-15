@@ -1,0 +1,60 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+# Schema PostgreSQL của môi trường hiện tại: khai báo DUY NHẤT ở đây (test ghi đè trong application-test.yml).
+filmlink:
+  db:
+    schema: ${DB_SCHEMA:public}
+  jwt:
+    # Khoá HS256 dạng Base64, tối thiểu 256 bit. KHÔNG có giá trị mặc định: thiếu thì app không khởi động.
+    secret: ${JWT_SECRET}
+    access-token-ttl: ${JWT_ACCESS_TOKEN_TTL:PT15M}
+    refresh-token-ttl: ${JWT_REFRESH_TOKEN_TTL:P7D}
+  mail:
+    # log = chỉ ghi email (kể cả OTP) ra log. Không dùng trên môi trường thật.
+    provider: ${MAIL_PROVIDER:log}
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
+  # SPIKE VNPay sandbox. Bí mật để trống thì endpoint trả 503, app vẫn khởi động.
+  vnpay:
+    tmn-code: ${VNPAY_TMN_CODE:}
+    hash-secret: ${VNPAY_HASH_SECRET:}
+    pay-url: ${VNPAY_PAY_URL:https://sandbox.vnpayment.vn/paymentv2/vpcpay.html}
+    return-url: ${VNPAY_RETURN_URL:}
+
+spring:
+  config:
+    import: optional:file:.env[.properties]
+  application:
+    name: filmlink-backend
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/filmlink}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD}
+    hikari:
+      # Hikari gọi Connection.setSchema() trên mọi connection => search_path = schema đích.
+      # Cần cho hàm trigger truy vấn bảng không ghi tên schema (trg_film_labs_owner_role).
+      schema: ${filmlink.db.schema}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        default_schema: ${filmlink.db.schema}
+  flyway:
+    enabled: true
+    # Flyway tự tạo schema nếu chưa có; flyway_schema_history nằm trong default-schema.
+    default-schema: ${filmlink.db.schema}
+    schemas: ${filmlink.db.schema}
+  mvc:
+    problemdetails:
+      enabled: true
+
+springdoc:
+  api-docs:
+    enabled: ${SWAGGER_ENABLED:true}
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: ${SWAGGER_ENABLED:true}
+    path: /swagger-ui.html

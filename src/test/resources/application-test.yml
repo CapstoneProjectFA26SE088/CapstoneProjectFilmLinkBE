@@ -1,0 +1,4 @@
+# Test dùng cùng database và tài khoản với app (đọc từ .env / biến môi trường), chỉ khác schema.
+filmlink:
+  db:
+    schema: ${DB_TEST_SCHEMA:filmlink_test}
