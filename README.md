@@ -14,17 +14,31 @@ Stack: Java 21 · Spring Boot 4.1.1 · PostgreSQL · Flyway · springdoc-openapi
   - Không cần tạo schema bằng tay: Flyway tự tạo nếu chưa có.
 - Cấu hình chỉ có một file `application.yml`. Giá trị riêng của từng máy đọc từ file `.env` ở gốc repo.
   Repo **không chứa** mật khẩu nào.
-- Chép `.env.example` thành `.env` rồi điền giá trị của bạn (`DB_URL`, `DB_SCHEMA`, `DB_TEST_SCHEMA`,
-  `DB_USERNAME`, `DB_PASSWORD`, `SWAGGER_ENABLED`). `.env` nằm trong `.gitignore`, **không commit**.
+- Chép `.env.example` thành `.env` rồi điền giá trị của bạn. `.env` nằm trong `.gitignore`, **không commit**.
+
+  | Biến | Bắt buộc | Mặc định | Dùng cho |
+  |---|---|---|---|
+  | `DB_URL`, `DB_USERNAME` | Có | — | Kết nối PostgreSQL |
+  | `DB_PASSWORD` | Có | — (bí mật) | Mật khẩu PostgreSQL |
+  | `DB_SCHEMA`, `DB_TEST_SCHEMA` | Có | — | Schema của app / của test |
+  | `SWAGGER_ENABLED` | Không | `true` | Bật/tắt Swagger UI và OpenAPI JSON |
+  | `SERVER_PORT` | Không | `8386` | Port HTTP |
+  | `JWT_SECRET` | **Có** | — (bí mật) | Khoá HS256 Base64, ≥ 256 bit. Sinh bằng PowerShell: `[Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))` |
+  | `JWT_ACCESS_TOKEN_TTL` | Không | `PT15M` | Thời hạn access token (NFR-SEC-01) |
+  | `JWT_REFRESH_TOKEN_TTL` | Không | `P7D` | Thời hạn refresh token (NFR-SEC-01) |
+  | `MAIL_PROVIDER` | Không | `log` | `log` = chỉ ghi email (kể cả OTP) ra log; không dùng trên môi trường thật |
+  | `CORS_ALLOWED_ORIGINS` | Không | `http://localhost:5173,http://localhost:3000` | Origin FE, phân tách dấu phẩy |
+  | `VNPAY_TMN_CODE`, `VNPAY_HASH_SECRET`, `VNPAY_RETURN_URL` | Không | trống (bí mật) | SPIKE VNPay sandbox; trống thì endpoint trả 503 |
+  | `VNPAY_PAY_URL` | Không | URL sandbox | Cổng thanh toán VNPay |
   - Viết `KEY=VALUE`, **không dùng dấu nháy** (dấu nháy sẽ thành một phần của giá trị).
   - Biến môi trường Windows (đặt bằng `setx`) nếu có sẽ **đè** giá trị trong `.env`.
   - IntelliJ: run configuration phải có working directory là **gốc repo**, nếu không app không thấy `.env`.
 - JVM phải chạy múi giờ UTC: Java trên Windows gửi múi giờ `Asia/Saigon`, PostgreSQL bản mới không còn tên này
   (lỗi `invalid value for parameter "TimeZone"`). `mvnw.cmd` đã tự thêm `-Duser.timezone=UTC` (cấu hình trong
   `pom.xml`); IntelliJ Run Configuration phải thêm VM options `-Duser.timezone=UTC`.
-- Khi deploy Azure (không có `.env`): đặt trong App Settings các biến `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`,
-  `DB_SCHEMA`, `SWAGGER_ENABLED` (`SWAGGER_ENABLED=false` để tắt Swagger UI và OpenAPI JSON).
-  `DB_PASSWORD` không có giá trị mặc định; thiếu thì app không khởi động.
+- Khi deploy Azure (không có `.env`): đặt trong App Settings các biến ở bảng trên (`SWAGGER_ENABLED=false` để
+  tắt Swagger UI và OpenAPI JSON). `DB_PASSWORD` và `JWT_SECRET` không có giá trị mặc định; thiếu thì app không
+  khởi động.
 
 ## 2. Chạy
 
@@ -33,9 +47,23 @@ mvnw.cmd spring-boot:run
 mvnw.cmd clean verify        # build + test (cần DB filmlink_test đang chạy)
 ```
 
-- Swagger UI: <http://localhost:8080/swagger-ui.html>
-- OpenAPI JSON: <http://localhost:8080/v3/api-docs>
-- Mọi API nằm dưới `/api/v1`. Chưa đăng nhập thì trả `401`.
+- Swagger UI: <http://localhost:8386/swagger-ui.html>
+- OpenAPI JSON: <http://localhost:8386/v3/api-docs>
+- Mọi API nằm dưới `/api/v1`. Chưa đăng nhập thì trả `401` dạng `ProblemDetail`.
+- Lỗi luôn là `ProblemDetail` có `errorCode` (mã kỹ thuật) và `messageCode` (mã MSG của SRS, có thể `null`).
+
+### Endpoint xác thực (UC01, UC06)
+
+| Method | Path | Quyền | Kết quả |
+|---|---|---|---|
+| POST | `/api/v1/auth/register` | public | 201 + tài khoản `PENDING_VERIFICATION`; OTP gửi qua email (provider `log`: xem log) |
+| POST | `/api/v1/auth/verify-email` | public | 200 + token; OTP sai/hết hạn: 422 `MSG11` |
+| POST | `/api/v1/auth/login` | public | 200 + token; sai thông tin: 401 `MSG09` |
+| POST | `/api/v1/auth/refresh` | public | 200 + cặp token mới; token cũ bị thu hồi |
+| POST | `/api/v1/auth/logout` | đã đăng nhập | 204; thu hồi refresh token gửi lên |
+| GET | `/api/v1/accounts/me` | đã đăng nhập | 200 + thông tin tài khoản |
+
+Gửi access token bằng header `Authorization: Bearer <accessToken>` (Swagger: nút **Authorize**, chỉ dán token).
 
 ### Migration (Flyway)
 
