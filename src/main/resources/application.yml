@@ -1,3 +1,8 @@
+# Schema PostgreSQL của môi trường hiện tại: khai báo DUY NHẤT ở đây (test ghi đè trong application-test.yml).
+filmlink:
+  db:
+    schema: ${DB_SCHEMA:public}
+
 spring:
   application:
     name: filmlink-backend
@@ -5,15 +10,27 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/filmlink}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD}
+    hikari:
+      # Hikari gọi Connection.setSchema() trên mọi connection => search_path = schema đích.
+      # Cần cho hàm trigger truy vấn bảng không ghi tên schema (trg_film_labs_owner_role).
+      schema: ${filmlink.db.schema}
   jpa:
     hibernate:
       ddl-auto: validate
     open-in-view: false
+    properties:
+      hibernate:
+        default_schema: ${filmlink.db.schema}
   flyway:
     enabled: true
+    # Flyway tự tạo schema nếu chưa có; flyway_schema_history nằm trong default-schema.
+    default-schema: ${filmlink.db.schema}
+    schemas: ${filmlink.db.schema}
   mvc:
     problemdetails:
       enabled: true
+  config:
+    import: optional:file:.env[.properties]
 
 springdoc:
   api-docs:

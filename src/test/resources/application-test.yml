@@ -1,5 +1,4 @@
-spring:
-  datasource:
-    url: jdbc:postgresql://localhost:5432/filmlink_test
-    username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD}
+# Test dùng cùng database và tài khoản với app (đọc từ .env / biến môi trường), chỉ khác schema.
+filmlink:
+  db:
+    schema: ${DB_TEST_SCHEMA:filmlink_test}

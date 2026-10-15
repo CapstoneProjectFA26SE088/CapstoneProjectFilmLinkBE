@@ -7,28 +7,24 @@ Stack: Java 21 · Spring Boot 4.1.1 · PostgreSQL · Flyway · springdoc-openapi
 ## 1. Yêu cầu
 
 - **JDK 21** (`java -version` phải ra 21; nếu máy có nhiều JDK, đặt `JAVA_HOME` trỏ tới JDK 21).
-- **PostgreSQL** cài trên máy (không dùng Docker), chạy ở `localhost:5432`.
-- Tạo hai database:
-
-  ```sql
-  CREATE DATABASE filmlink;
-  CREATE DATABASE filmlink_test;
-  ```
-
-- Cấu hình chỉ có một file `application.yml`; giá trị riêng của từng máy/môi trường đọc từ biến môi trường.
+- **PostgreSQL 16+** (cài trực tiếp hoặc chạy Docker); host, port, database ghi trong `.env`.
+- **Một** database PostgreSQL, trong đó app và test dùng hai **schema** riêng:
+  - App: schema `DB_SCHEMA` (ví dụ `filmlink_local`).
+  - Test (`mvnw.cmd clean verify`): schema `DB_TEST_SCHEMA` (ví dụ `filmlink_test`), không đụng dữ liệu của app.
+  - Không cần tạo schema bằng tay: Flyway tự tạo nếu chưa có.
+- Cấu hình chỉ có một file `application.yml`. Giá trị riêng của từng máy đọc từ file `.env` ở gốc repo.
   Repo **không chứa** mật khẩu nào.
-- Đặt mật khẩu PostgreSQL một lần:
-
-  ```bat
-  setx DB_PASSWORD "mật_khẩu_postgres"
-  ```
-
-  rồi **mở lại** terminal/IntelliJ để biến có hiệu lực.
-- `DB_URL` (mặc định `jdbc:postgresql://localhost:5432/filmlink`) và `DB_USERNAME` (mặc định `postgres`)
-  đã có giá trị mặc định cho máy local, chỉ đặt khi máy bạn khác.
-- Test dùng DB `filmlink_test`, chung tài khoản `DB_USERNAME` / `DB_PASSWORD` với app.
-- Khi deploy Azure: đặt `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `SWAGGER_ENABLED` trong App Settings
-  (`SWAGGER_ENABLED=false` để tắt Swagger UI và OpenAPI JSON).
+- Chép `.env.example` thành `.env` rồi điền giá trị của bạn (`DB_URL`, `DB_SCHEMA`, `DB_TEST_SCHEMA`,
+  `DB_USERNAME`, `DB_PASSWORD`, `SWAGGER_ENABLED`). `.env` nằm trong `.gitignore`, **không commit**.
+  - Viết `KEY=VALUE`, **không dùng dấu nháy** (dấu nháy sẽ thành một phần của giá trị).
+  - Biến môi trường Windows (đặt bằng `setx`) nếu có sẽ **đè** giá trị trong `.env`.
+  - IntelliJ: run configuration phải có working directory là **gốc repo**, nếu không app không thấy `.env`.
+- JVM phải chạy múi giờ UTC: Java trên Windows gửi múi giờ `Asia/Saigon`, PostgreSQL bản mới không còn tên này
+  (lỗi `invalid value for parameter "TimeZone"`). `mvnw.cmd` đã tự thêm `-Duser.timezone=UTC` (cấu hình trong
+  `pom.xml`); IntelliJ Run Configuration phải thêm VM options `-Duser.timezone=UTC`.
+- Khi deploy Azure (không có `.env`): đặt trong App Settings các biến `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`,
+  `DB_SCHEMA`, `SWAGGER_ENABLED` (`SWAGGER_ENABLED=false` để tắt Swagger UI và OpenAPI JSON).
+  `DB_PASSWORD` không có giá trị mặc định; thiếu thì app không khởi động.
 
 ## 2. Chạy
 

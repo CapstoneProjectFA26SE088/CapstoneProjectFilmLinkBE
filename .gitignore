@@ -34,3 +34,13 @@ build/
 
 ### Local config & generated ###
 effective-pom
+
+### Secrets - local environment ###
+.env
+.env.*
+!.env.example
+
+docs
+./docs
+docs/*
+CLAUDE.md
