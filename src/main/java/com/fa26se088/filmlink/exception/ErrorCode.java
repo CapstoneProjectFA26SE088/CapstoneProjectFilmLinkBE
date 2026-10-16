@@ -31,6 +31,10 @@ public enum ErrorCode {
   ACCOUNT_OTP_INVALID(HttpStatus.UNPROCESSABLE_CONTENT, "MSG11"),
   ACCOUNT_REGISTRATION_REJECTED(HttpStatus.UNPROCESSABLE_CONTENT, null),
 
+  // --- lab ---
+  LAB_NOT_FOUND(HttpStatus.NOT_FOUND, null),
+  LAB_ACCESS_DENIED(HttpStatus.FORBIDDEN, null),
+
   // --- payment ---
   PAYMENT_GATEWAY_NOT_CONFIGURED(HttpStatus.SERVICE_UNAVAILABLE, null);
 
