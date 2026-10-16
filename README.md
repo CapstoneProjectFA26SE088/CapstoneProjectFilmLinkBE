@@ -174,7 +174,46 @@ Code Java theo Google Java Style (indent 2 space, không import `*`). Entity k�
 10. Kiểm tra trên Swagger/Postman
 11. Tạo PR
 
-## 7. Quy ước git
+## 7. Quy ước dùng chung
+
+**Phân trang (CR-01, CR-02)**
+
+- Endpoint trả danh sách nhận `Pageable` và trả `dto/common/PageResponse<T>`
+  (`content`, `page`, `size`, `totalElements`, `totalPages`, `hasNext`). Không trả thẳng `Page`.
+- Chuyển trong service: `PageResponse.from(page, mapper::toResponse)` (hoặc `PageResponse.from(page)`
+  khi `Page` đã chứa DTO).
+- Controller khai báo sort mặc định:
+  `@PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable`.
+- Trang đánh số từ 0. Mặc định 20 bản ghi, tối đa 100 (`spring.data.web.pageable.*`); xin quá 100 thì bị hạ về 100.
+
+**Lấy tài khoản hiện tại**
+
+- Controller: `@AuthenticationPrincipal AuthenticatedAccount account`, rồi truyền `account.id()` xuống service.
+- Chỗ không phải controller (listener, aspect…): `CurrentAccount.find()` / `CurrentAccount.require()`
+  (`require()` ném `AUTHENTICATION_REQUIRED` 401).
+- Service nghiệp vụ nhận `accountId` qua tham số, không tự đọc `SecurityContext`.
+
+**Kiểm quyền Film Lab Owner trên lab**
+
+- Gọi `LabAccessService`, không tự viết lại và không inject `FilmLabRepository` ngoài domain `lab` (R4):
+  - `requireOwnedLab(ownerAccountId)`: lab của chủ; chưa có lab → `LAB_NOT_FOUND` (404).
+  - `requireOwnedLab(ownerAccountId, labId)`: lab không tồn tại → `LAB_NOT_FOUND` (404);
+    lab của chủ khác → `LAB_ACCESS_DENIED` (403).
+
+**Job định kỳ (`scheduler/`)**
+
+- Class `<Domain><Hành động>Job` trong `scheduler/`. Job mỏng: chỉ gọi service, business rule nằm ở service.
+- Cron đọc từ `filmlink.jobs.<tên-job>.cron` trong `application.yml`.
+- **Luôn** ghi `zone = "Asia/Ho_Chi_Minh"` (JVM chạy UTC; thiếu zone thì job "1 giờ sáng" chạy lúc 8 giờ
+  sáng giờ Việt Nam). Không viết `Asia/Saigon`.
+  ```java
+  @Scheduled(cron = "${filmlink.jobs.order-auto-close.cron}", zone = "Asia/Ho_Chi_Minh")
+  ```
+- Idempotent: chạy lại hay chạy trễ không làm sai dữ liệu. Log số bản ghi đã xử lý.
+- Thao tác nhạy cảm ghi audit log với actor = `null` (System) — `AuditLogService` có ở FND-01.
+- Bật/tắt toàn bộ job bằng `filmlink.scheduling.enabled` (`config/SchedulingConfig`); test đặt `false`.
+
+## 8. Quy ước git
 
 - Nhánh: `feature/<mô-tả>`, `bugfix/<mã-defect>`; tạo từ `dev`, PR vào `dev`.
 - Commit theo [Conventional Commits](https://www.conventionalcommits.org/):

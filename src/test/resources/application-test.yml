@@ -2,3 +2,6 @@
 filmlink:
   db:
     schema: ${DB_TEST_SCHEMA:filmlink_test}
+  # Job @Scheduled không chạy giữa test.
+  scheduling:
+    enabled: false

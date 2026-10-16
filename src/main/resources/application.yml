@@ -21,6 +21,10 @@ filmlink:
     hash-secret: ${VNPAY_HASH_SECRET:}
     pay-url: ${VNPAY_PAY_URL:https://sandbox.vnpayment.vn/paymentv2/vpcpay.html}
     return-url: ${VNPAY_RETURN_URL:}
+  # Bật @Scheduled (config/SchedulingConfig). Test đặt false.
+  scheduling:
+    enabled: true
+  # Cron của từng job: filmlink.jobs.<tên-job>.cron (job luôn ghi zone = "Asia/Ho_Chi_Minh").
 
 spring:
   config:
@@ -35,6 +39,12 @@ spring:
       # Hikari gọi Connection.setSchema() trên mọi connection => search_path = schema đích.
       # Cần cho hàm trigger truy vấn bảng không ghi tên schema (trg_film_labs_owner_role).
       schema: ${filmlink.db.schema}
+  data:
+    web:
+      pageable:
+        # CR-01: mặc định 20 bản ghi / trang; trang đánh số từ 0. Client xin quá 100 thì bị hạ về 100.
+        default-page-size: 20
+        max-page-size: 100
   jpa:
     hibernate:
       ddl-auto: validate
