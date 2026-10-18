@@ -210,8 +210,23 @@ Code Java theo Google Java Style (indent 2 space, không import `*`). Entity k�
   @Scheduled(cron = "${filmlink.jobs.order-auto-close.cron}", zone = "Asia/Ho_Chi_Minh")
   ```
 - Idempotent: chạy lại hay chạy trễ không làm sai dữ liệu. Log số bản ghi đã xử lý.
-- Thao tác nhạy cảm ghi audit log với actor = `null` (System) — `AuditLogService` có ở FND-01.
+- Thao tác nhạy cảm ghi audit log với actor = `null` (System), xem mục **Audit log** bên dưới.
 - Bật/tắt toàn bộ job bằng `filmlink.scheduling.enabled` (`config/SchedulingConfig`); test đặt `false`.
+
+**Audit log (BR-32)**
+
+- Thao tác nhạy cảm gọi `AuditLogService` trong method `@Transactional` của nghiệp vụ:
+  `auditLogService.recordSuccess(new AuditEntry(AuditAction.X, AuditTargetType.Y, id, reason, before, after))`.
+  Actor do service tự lấy bằng `CurrentAccount.find()`; không đăng nhập (Scheduler) thì ghi là System.
+  Không gọi audit từ listener `@Async` (không có `SecurityContext`, sẽ bị ghi nhầm là System).
+- `before`/`after` là `Map` lưu jsonb, có thể `null`; chỉ chứa giá trị đơn giản (String, số, boolean, enum dạng
+  String, Instant dạng ISO). **Không** đưa entity, **không** đưa dữ liệu nhạy cảm (password hash, OTP, refresh
+  token, secret): audit log lưu tối thiểu 12 tháng và không xoá được.
+- `recordSuccess` rollback cùng nghiệp vụ; `recordFailure` (thao tác bị từ chối) chạy transaction riêng nên vẫn
+  được lưu. Thiếu giá trị thì tự thêm vào nhóm domain mình trong `AuditAction` / `AuditTargetType`.
+- Không ghi audit cho login / refresh / register / verify-email. Admin xem tại `GET /api/v1/admin/audit-logs`.
+- Viết test: tài khoản đã có dòng audit thì không xoá được (FK từ `audit_logs`); test dùng email ngẫu nhiên,
+  không `deleteAll()` bảng `user_accounts`.
 
 ## 8. Quy ước git
 
