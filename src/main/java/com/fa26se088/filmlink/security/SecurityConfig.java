@@ -24,8 +24,8 @@ import org.springframework.web.servlet.HandlerExceptionResolver;
 /**
  * Cấu hình Spring Security: stateless, xác thực bằng access token JWT.
  *
- * <p>Mặc định mọi request phải đăng nhập. Chỉ các endpoint trong {@link #PUBLIC_POST_PATHS}, Swagger
- * và {@code /error} được mở. Phân quyền nghiệp vụ theo ma trận SRS 3.1.3 kiểm ở tầng service hoặc
+ * <p>Mặc định mọi request phải đăng nhập. Chỉ các endpoint trong {@link #PUBLIC_POST_PATHS}, {@link
+ * #PUBLIC_GET_PATHS}, Swagger và {@code /error} được mở. Phân quyền nghiệp vụ theo ma trận SRS 3.1.3 kiểm ở tầng service hoặc
  * bằng {@code @PreAuthorize} (CR-14).
  */
 @Configuration
@@ -36,6 +36,9 @@ public class SecurityConfig {
   private static final String[] PUBLIC_POST_PATHS = {
     "/api/v1/auth/register", "/api/v1/auth/verify-email", "/api/v1/auth/login", "/api/v1/auth/refresh"
   };
+
+  /** Link tải file ký HMAC của storage local: chữ ký chính là quyền truy cập (NFR-PRI-02). */
+  private static final String[] PUBLIC_GET_PATHS = {"/api/v1/files"};
 
   private static final String[] SWAGGER_PATHS = {
     "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html"
@@ -56,6 +59,8 @@ public class SecurityConfig {
         .authorizeHttpRequests(
             auth ->
                 auth.requestMatchers(HttpMethod.POST, PUBLIC_POST_PATHS)
+                    .permitAll()
+                    .requestMatchers(HttpMethod.GET, PUBLIC_GET_PATHS)
                     .permitAll()
                     .requestMatchers(SWAGGER_PATHS)
                     .permitAll()

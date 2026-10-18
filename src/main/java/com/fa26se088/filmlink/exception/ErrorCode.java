@@ -36,7 +36,15 @@ public enum ErrorCode {
   LAB_ACCESS_DENIED(HttpStatus.FORBIDDEN, null),
 
   // --- payment ---
-  PAYMENT_GATEWAY_NOT_CONFIGURED(HttpStatus.SERVICE_UNAVAILABLE, null);
+  PAYMENT_GATEWAY_NOT_CONFIGURED(HttpStatus.SERVICE_UNAVAILABLE, null),
+
+  // --- storage (client/storage) ---
+  STORAGE_FILE_TYPE_NOT_ALLOWED(HttpStatus.BAD_REQUEST, null),
+  STORAGE_FILE_TOO_LARGE(HttpStatus.CONTENT_TOO_LARGE, null),
+  /** Sai chữ ký và hết hạn dùng chung một mã, không tiết lộ lý do. */
+  STORAGE_LINK_INVALID(HttpStatus.FORBIDDEN, null),
+  /** UH-39: storage lỗi thì báo rõ, phần khác vẫn chạy. */
+  STORAGE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, null);
 
   private final HttpStatus httpStatus;
   private final String messageCode;

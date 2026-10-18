@@ -228,6 +228,14 @@ Code Java theo Google Java Style (indent 2 space, không import `*`). Entity k�
 - Viết test: tài khoản đã có dòng audit thì không xoá được (FK từ `audit_logs`); test dùng email ngẫu nhiên,
   không `deleteAll()` bảng `user_accounts`.
 
+**Lưu trữ file (`client/storage`, NFR-PRI-02)**
+
+- Inject `StorageClient` (không dùng thẳng `LocalStorageClient`): `upload(StoragePurpose.X, file.getOriginalFilename(), in, file.getSize())`
+  trả blobKey. Loại file (magic bytes) và dung lượng do `StoragePurpose` kiểm; thiếu mục đích thì thêm vào enum.
+- DB chỉ lưu blobKey (`blob_key`, `avatar_blob_key`), không lưu URL hay đường dẫn. Trả link cho client bằng
+  `signedUrl(blobKey)` lúc tạo response (link hết hạn sau 15 phút, không lưu lại).
+- Không có endpoint upload chung: mỗi domain tự mở endpoint multipart của mình (avatar, giấy tờ lab…) và gọi `StorageClient`.
+
 ## 8. Quy ước git
 
 - Nhánh: `feature/<mô-tả>`, `bugfix/<mã-defect>`; tạo từ `dev`, PR vào `dev`.

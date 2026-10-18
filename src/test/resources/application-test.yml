@@ -2,6 +2,11 @@
 filmlink:
   db:
     schema: ${DB_TEST_SCHEMA:filmlink_test}
+  # File test ghi vào thư mục tạm, không đụng STORAGE_LOCAL_ROOT của máy dev.
+  storage:
+    provider: local
+    local:
+      root-dir: ${java.io.tmpdir}/filmlink-test-storage
   # Job @Scheduled không chạy giữa test.
   scheduling:
     enabled: false

@@ -21,6 +21,17 @@ filmlink:
     hash-secret: ${VNPAY_HASH_SECRET:}
     pay-url: ${VNPAY_PAY_URL:https://sandbox.vnpayment.vn/paymentv2/vpcpay.html}
     return-url: ${VNPAY_RETURN_URL:}
+  # Lưu trữ file (client/storage). DB chỉ lưu blobKey, link tải là link ký có hạn.
+  storage:
+    provider: ${STORAGE_PROVIDER:local}
+    # NFR-PRI-02: tối đa 15 phút, quá thì app không khởi động.
+    signed-url-ttl: ${STORAGE_SIGNED_URL_TTL:PT15M}
+    local:
+      # Bắt buộc khi provider = local. Đường dẫn Windows viết bằng "/" (.env đọc như .properties).
+      root-dir: ${STORAGE_LOCAL_ROOT}
+      public-base-url: ${STORAGE_PUBLIC_BASE_URL:http://localhost:${server.port}}
+      # Khoá HMAC-SHA256 Base64 >= 256 bit, riêng với JWT_SECRET. Không có giá trị mặc định.
+      signing-secret: ${STORAGE_SIGNING_SECRET}
   # Bật @Scheduled (config/SchedulingConfig). Test đặt false.
   scheduling:
     enabled: true
@@ -57,6 +68,11 @@ spring:
     # Flyway tự tạo schema nếu chưa có; flyway_schema_history nằm trong default-schema.
     default-schema: ${filmlink.db.schema}
     schemas: ${filmlink.db.schema}
+  servlet:
+    multipart:
+      # Trần chung của request; giới hạn theo loại file nằm ở StoragePurpose.
+      max-file-size: 10MB
+      max-request-size: 50MB
   mvc:
     problemdetails:
       enabled: true

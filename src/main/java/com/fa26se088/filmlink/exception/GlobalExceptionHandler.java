@@ -13,6 +13,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 /**
@@ -68,6 +69,18 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             .toList();
     problem.setProperty("errors", errors);
     return ResponseEntity.badRequest().headers(headers).body(problem);
+  }
+
+  /** Multipart vượt {@code spring.servlet.multipart.max-file-size} / {@code max-request-size}. */
+  @Override
+  protected ResponseEntity<Object> handleMaxUploadSizeExceededException(
+      MaxUploadSizeExceededException ex,
+      HttpHeaders headers,
+      HttpStatusCode status,
+      WebRequest request) {
+    ProblemDetail problem =
+        toProblem(ErrorCode.STORAGE_FILE_TOO_LARGE, "File vượt quá dung lượng cho phép.");
+    return ResponseEntity.status(problem.getStatus()).headers(headers).body(problem);
   }
 
   /**
