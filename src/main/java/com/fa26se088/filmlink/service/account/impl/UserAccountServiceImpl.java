@@ -1,15 +1,19 @@
 package com.fa26se088.filmlink.service.account.impl;
 
 import com.fa26se088.filmlink.client.notification.EmailClient;
+import com.fa26se088.filmlink.dto.account.request.ChangePasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.RegisterRequest;
 import com.fa26se088.filmlink.dto.account.request.VerifyEmailRequest;
 import com.fa26se088.filmlink.dto.account.response.TokenResponse;
 import com.fa26se088.filmlink.dto.account.response.UserAccountResponse;
+import com.fa26se088.filmlink.dto.audit.request.AuditEntry;
 import com.fa26se088.filmlink.entity.account.OtpCode;
 import com.fa26se088.filmlink.entity.account.UserAccount;
 import com.fa26se088.filmlink.entity.account.enums.OtpPurpose;
 import com.fa26se088.filmlink.entity.account.enums.UserAccountRole;
 import com.fa26se088.filmlink.entity.account.enums.UserAccountStatus;
+import com.fa26se088.filmlink.entity.audit.enums.AuditAction;
+import com.fa26se088.filmlink.entity.audit.enums.AuditTargetType;
 import com.fa26se088.filmlink.exception.BusinessException;
 import com.fa26se088.filmlink.exception.ErrorCode;
 import com.fa26se088.filmlink.mapper.account.UserAccountMapper;
@@ -17,6 +21,7 @@ import com.fa26se088.filmlink.repository.account.OtpCodeRepository;
 import com.fa26se088.filmlink.repository.account.UserAccountRepository;
 import com.fa26se088.filmlink.service.account.AuthenticationService;
 import com.fa26se088.filmlink.service.account.UserAccountService;
+import com.fa26se088.filmlink.service.audit.AuditLogService;
 import com.fa26se088.filmlink.utils.EmailUtils;
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -43,6 +48,7 @@ public class UserAccountServiceImpl implements UserAccountService {
   private final EmailClient emailClient;
   private final AuthenticationService authenticationService;
   private final UserAccountMapper userAccountMapper;
+  private final AuditLogService auditLogService;
 
   /**
    * BR-01: tài khoản tự đăng ký luôn có role PHOTOGRAPHER, không nhận role từ request.
@@ -124,6 +130,76 @@ public class UserAccountServiceImpl implements UserAccountService {
         .orElseThrow(
             () ->
                 new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Không tìm thấy tài khoản."));
+  }
+
+  /**
+   * UC02: đổi mật khẩu tài khoản.
+   *
+   * <ul>
+   *   <li>Kiểm tra tài khoản tồn tại và đang ACTIVE.
+   *   <li>Kiểm tra mật khẩu cũ khớp với hash hiện tại: sai thì ghi audit FAILURE và ném
+   *       {@code ACCOUNT_OLD_PASSWORD_INVALID}.
+   *   <li>Kiểm tra mật khẩu mới khác mật khẩu cũ: trùng thì ném
+   *       {@code ACCOUNT_NEW_PASSWORD_SAME_AS_OLD}.
+   *   <li>Lưu mật khẩu mới băm bằng BCrypt.
+   *   <li>Thu hồi mọi refresh token qua {@link AuthenticationService#revokeAllTokens(Long)}
+   *       để đăng xuất mọi phiên khác (dùng index {@code ix_refresh_tokens_active_by_account}).
+   *   <li>Gửi email cảnh báo bảo mật tới địa chỉ của tài khoản.
+   *   <li>Ghi audit log SUCCESS (không chứa thông tin mật khẩu).
+   * </ul>
+   */
+  @Override
+  @Transactional
+  public void changePassword(Long accountId, ChangePasswordRequest request) {
+    UserAccount account =
+        userAccountRepository
+            .findById(accountId)
+            .filter(found -> found.getStatus() == UserAccountStatus.ACTIVE)
+            .orElseThrow(
+                () -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Không tìm thấy tài khoản."));
+
+    if (!passwordEncoder.matches(request.oldPassword(), account.getPasswordHash())) {
+      auditLogService.recordFailure(
+          new AuditEntry(
+              AuditAction.ACCOUNT_PASSWORD_CHANGED,
+              AuditTargetType.USER_ACCOUNT,
+              accountId,
+              "Mật khẩu cũ không chính xác",
+              null,
+              null));
+      throw new BusinessException(
+          ErrorCode.ACCOUNT_OLD_PASSWORD_INVALID, "Mật khẩu cũ không chính xác.");
+    }
+
+    if (request.oldPassword().equals(request.newPassword())
+        || passwordEncoder.matches(request.newPassword(), account.getPasswordHash())) {
+      throw new BusinessException(
+          ErrorCode.ACCOUNT_NEW_PASSWORD_SAME_AS_OLD,
+          "Mật khẩu mới phải khác mật khẩu hiện tại.");
+    }
+
+    account.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+    userAccountRepository.saveAndFlush(account);
+
+    authenticationService.revokeAllTokens(accountId);
+
+    emailClient.send(
+        account.getEmail(),
+        "FilmLink - Cảnh báo bảo mật: Mật khẩu đã được thay đổi",
+        "Xin chào "
+            + account.getFullName()
+            + ",\n\nMật khẩu tài khoản FilmLink của bạn vừa được thay đổi thành công. "
+            + "Tất cả các phiên đăng nhập khác của bạn đã được đăng xuất để đảm bảo an toàn.\n\n"
+            + "Nếu bạn không thực hiện thay đổi này, vui lòng liên hệ ngay với quản trị viên để bảo vệ tài khoản.");
+
+    auditLogService.recordSuccess(
+        new AuditEntry(
+            AuditAction.ACCOUNT_PASSWORD_CHANGED,
+            AuditTargetType.USER_ACCOUNT,
+            accountId,
+            "Người dùng tự đổi mật khẩu",
+            null,
+            null));
   }
 
   /** UC06 bước 2: sinh OTP bằng {@link SecureRandom}, chỉ lưu BCrypt hash, gửi mã gốc qua email. */

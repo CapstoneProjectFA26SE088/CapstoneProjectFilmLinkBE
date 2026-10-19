@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -241,6 +242,12 @@ class AuthenticationServiceImplTest {
     UserAccount locked = account(UserAccountStatus.LOCKED);
     when(userAccountRepository.findById(1L)).thenReturn(Optional.of(locked));
     assertThat(service.loadActiveAccount(1L)).isEmpty();
+  }
+
+  @Test
+  void revokeAllTokens_callsRepository() {
+    service.revokeAllTokens(1L);
+    verify(refreshTokenRepository).revokeAllActiveByAccountId(eq(1L), any(Instant.class));
   }
 
   private static void assertError(ThrowingCallable call, ErrorCode expected) {

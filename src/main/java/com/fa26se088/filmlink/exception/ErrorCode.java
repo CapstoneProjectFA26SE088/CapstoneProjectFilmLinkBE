@@ -30,6 +30,10 @@ public enum ErrorCode {
   ACCOUNT_INVALID_TOKEN(HttpStatus.UNAUTHORIZED, null),
   ACCOUNT_OTP_INVALID(HttpStatus.UNPROCESSABLE_CONTENT, "MSG11"),
   ACCOUNT_REGISTRATION_REJECTED(HttpStatus.UNPROCESSABLE_CONTENT, null),
+  /** UC02: mật khẩu cũ không đúng khi đổi mật khẩu. */
+  ACCOUNT_OLD_PASSWORD_INVALID(HttpStatus.BAD_REQUEST, null),
+  /** UC02: mật khẩu mới trùng với mật khẩu hiện tại. */
+  ACCOUNT_NEW_PASSWORD_SAME_AS_OLD(HttpStatus.BAD_REQUEST, null),
 
   // --- lab ---
   LAB_NOT_FOUND(HttpStatus.NOT_FOUND, null),

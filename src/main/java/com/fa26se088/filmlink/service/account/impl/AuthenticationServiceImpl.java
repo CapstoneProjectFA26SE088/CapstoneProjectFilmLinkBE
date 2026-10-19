@@ -138,6 +138,16 @@ public class AuthenticationServiceImpl implements AuthenticationService {
     return createTokens(account, Instant.now()).response();
   }
 
+  /**
+   * UC02, UC11: thu hồi mọi refresh token đang còn hiệu lực của tài khoản (dùng index
+   * {@code ix_refresh_tokens_active_by_account}).
+   */
+  @Override
+  @Transactional
+  public void revokeAllTokens(Long accountId) {
+    refreshTokenRepository.revokeAllActiveByAccountId(accountId, Instant.now());
+  }
+
   @Override
   @Transactional(readOnly = true)
   public Optional<AuthenticatedAccount> loadActiveAccount(Long accountId) {

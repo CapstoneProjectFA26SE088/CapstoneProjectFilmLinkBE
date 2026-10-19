@@ -37,10 +37,11 @@ effective-pom
 
 ### Secrets - local environment ###
 .env
-.env.*
-!.env.example
+.env
+!.env
 
 docs
 ./docs
 docs/*
 CLAUDE.md
+docs/

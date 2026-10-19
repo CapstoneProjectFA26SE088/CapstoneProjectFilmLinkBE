@@ -1,11 +1,12 @@
 package com.fa26se088.filmlink.service.account;
 
+import com.fa26se088.filmlink.dto.account.request.ChangePasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.RegisterRequest;
 import com.fa26se088.filmlink.dto.account.request.VerifyEmailRequest;
 import com.fa26se088.filmlink.dto.account.response.TokenResponse;
 import com.fa26se088.filmlink.dto.account.response.UserAccountResponse;
 
-/** Vòng đời tài khoản: đăng ký Photographer, xác thực email, hồ sơ của chính mình (UC06). */
+/** Vòng đời tài khoản: đăng ký Photographer, xác thực email, hồ sơ của chính mình (UC06), đổi mật khẩu (UC02). */
 public interface UserAccountService {
 
   /**
@@ -24,4 +25,15 @@ public interface UserAccountService {
 
   /** Thông tin tài khoản đang đăng nhập. */
   UserAccountResponse getCurrentAccount(Long accountId);
+
+  /**
+   * UC02: đổi mật khẩu tài khoản.
+   *
+   * <p>Kiểm tra mật khẩu cũ, mật khẩu mới khác cũ và tuân thủ quy tắc. Khi đổi thành công, thu
+   * hồi toàn bộ refresh token của tài khoản, gửi email cảnh báo bảo mật và ghi audit log.
+   *
+   * @param accountId ID tài khoản đang đăng nhập
+   * @param request thông tin mật khẩu cũ và mật khẩu mới
+   */
+  void changePassword(Long accountId, ChangePasswordRequest request);
 }

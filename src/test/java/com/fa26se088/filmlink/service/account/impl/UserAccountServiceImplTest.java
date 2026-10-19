@@ -4,27 +4,33 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fa26se088.filmlink.client.notification.EmailClient;
+import com.fa26se088.filmlink.dto.account.request.ChangePasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.RegisterRequest;
 import com.fa26se088.filmlink.dto.account.request.VerifyEmailRequest;
 import com.fa26se088.filmlink.dto.account.response.TokenResponse;
 import com.fa26se088.filmlink.dto.account.response.UserAccountResponse;
+import com.fa26se088.filmlink.dto.audit.request.AuditEntry;
 import com.fa26se088.filmlink.entity.account.OtpCode;
 import com.fa26se088.filmlink.entity.account.UserAccount;
 import com.fa26se088.filmlink.entity.account.enums.OtpPurpose;
 import com.fa26se088.filmlink.entity.account.enums.UserAccountRole;
 import com.fa26se088.filmlink.entity.account.enums.UserAccountStatus;
+import com.fa26se088.filmlink.entity.audit.enums.AuditAction;
+import com.fa26se088.filmlink.entity.audit.enums.AuditTargetType;
 import com.fa26se088.filmlink.exception.BusinessException;
 import com.fa26se088.filmlink.exception.ErrorCode;
 import com.fa26se088.filmlink.mapper.account.UserAccountMapper;
 import com.fa26se088.filmlink.repository.account.OtpCodeRepository;
 import com.fa26se088.filmlink.repository.account.UserAccountRepository;
 import com.fa26se088.filmlink.service.account.AuthenticationService;
+import com.fa26se088.filmlink.service.audit.AuditLogService;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -51,6 +57,7 @@ class UserAccountServiceImplTest {
   @Mock private OtpCodeRepository otpCodeRepository;
   @Mock private EmailClient emailClient;
   @Mock private AuthenticationService authenticationService;
+  @Mock private AuditLogService auditLogService;
 
   /** BCrypt thật (strength thấp cho nhanh) để kiểm hash OTP đúng như khi chạy thật. */
   private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder(4);
@@ -66,7 +73,8 @@ class UserAccountServiceImplTest {
             passwordEncoder,
             emailClient,
             authenticationService,
-            new UserAccountMapper());
+            new UserAccountMapper(),
+            auditLogService);
   }
 
   // --- register (UC06, BR-01) ---
@@ -224,5 +232,104 @@ class UserAccountServiceImplTest {
     otpCode.setExpiresAt(expiresAt);
     otpCode.setFailedAttempts(failedAttempts);
     return otpCode;
+  }
+
+  // --- changePassword (UC02) ---
+
+  @Test
+  void changePassword_success_updatesHashRevokesTokensSendsEmailAndRecordsAudit() {
+    UserAccount account = activeAccount("oldSecret123");
+    when(userAccountRepository.findById(1L)).thenReturn(Optional.of(account));
+
+    service.changePassword(1L, new ChangePasswordRequest("oldSecret123", "newSecret456"));
+
+    assertThat(passwordEncoder.matches("newSecret456", account.getPasswordHash())).isTrue();
+    verify(userAccountRepository).saveAndFlush(account);
+    verify(authenticationService).revokeAllTokens(1L);
+    verify(emailClient)
+        .send(
+            eq(EMAIL),
+            eq("FilmLink - Cảnh báo bảo mật: Mật khẩu đã được thay đổi"),
+            anyString());
+    verify(auditLogService)
+        .recordSuccess(
+            argThat(
+                entry ->
+                    entry.action() == AuditAction.ACCOUNT_PASSWORD_CHANGED
+                        && entry.targetType() == AuditTargetType.USER_ACCOUNT
+                        && entry.targetId().equals(1L)
+                        && entry.before() == null
+                        && entry.after() == null));
+  }
+
+  @Test
+  void changePassword_wrongOldPassword_recordsFailureAuditAndThrows() {
+    UserAccount account = activeAccount("oldSecret123");
+    when(userAccountRepository.findById(1L)).thenReturn(Optional.of(account));
+
+    assertThatThrownBy(
+            () ->
+                service.changePassword(
+                    1L, new ChangePasswordRequest("wrongPassword99", "newSecret456")))
+        .isInstanceOfSatisfying(
+            BusinessException.class,
+            ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.ACCOUNT_OLD_PASSWORD_INVALID));
+
+    verify(auditLogService)
+        .recordFailure(
+            argThat(
+                entry ->
+                    entry.action() == AuditAction.ACCOUNT_PASSWORD_CHANGED
+                        && entry.targetType() == AuditTargetType.USER_ACCOUNT
+                        && entry.targetId().equals(1L)));
+    verify(authenticationService, never()).revokeAllTokens(any());
+    verify(emailClient, never()).send(any(), any(), any());
+    verify(userAccountRepository, never()).save(any());
+  }
+
+  @Test
+  void changePassword_newPasswordSameAsOld_throwsException() {
+    UserAccount account = activeAccount("sameSecret123");
+    when(userAccountRepository.findById(1L)).thenReturn(Optional.of(account));
+
+    assertThatThrownBy(
+            () ->
+                service.changePassword(
+                    1L, new ChangePasswordRequest("sameSecret123", "sameSecret123")))
+        .isInstanceOfSatisfying(
+            BusinessException.class,
+            ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.ACCOUNT_NEW_PASSWORD_SAME_AS_OLD));
+
+    verify(authenticationService, never()).revokeAllTokens(any());
+    verify(emailClient, never()).send(any(), any(), any());
+    verify(userAccountRepository, never()).save(any());
+  }
+
+  @Test
+  void changePassword_accountNotFoundOrInactive_throwsNotFound() {
+    when(userAccountRepository.findById(1L)).thenReturn(Optional.empty());
+
+    assertThatThrownBy(
+            () ->
+                service.changePassword(
+                    1L, new ChangePasswordRequest("oldSecret123", "newSecret456")))
+        .isInstanceOfSatisfying(
+            BusinessException.class,
+            ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.RESOURCE_NOT_FOUND));
+
+    verify(auditLogService, never()).recordFailure(any());
+    verify(auditLogService, never()).recordSuccess(any());
+    verify(authenticationService, never()).revokeAllTokens(any());
+  }
+
+  private UserAccount activeAccount(String rawPassword) {
+    UserAccount account = new UserAccount();
+    ReflectionTestUtils.setField(account, "id", 1L);
+    account.setEmail(EMAIL);
+    account.setFullName("Nguyen Van A");
+    account.setPasswordHash(passwordEncoder.encode(rawPassword));
+    account.setRole(UserAccountRole.PHOTOGRAPHER);
+    account.setStatus(UserAccountStatus.ACTIVE);
+    return account;
   }
 }
