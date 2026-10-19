@@ -37,8 +37,17 @@ public class SecurityConfig {
     "/api/v1/auth/register", "/api/v1/auth/verify-email", "/api/v1/auth/login", "/api/v1/auth/refresh"
   };
 
-  /** Link tải file ký HMAC của storage local: chữ ký chính là quyền truy cập (NFR-PRI-02). */
-  private static final String[] PUBLIC_GET_PATHS = {"/api/v1/files"};
+  /**
+   * Link tải file ký HMAC của storage local (NFR-PRI-02) và danh mục master data công khai (MD-01,
+   * BR-16).
+   */
+  private static final String[] PUBLIC_GET_PATHS = {
+    "/api/v1/files",
+    "/api/v1/film-processes",
+    "/api/v1/film-formats",
+    "/api/v1/service-types",
+    "/api/v1/film-stocks"
+  };
 
   private static final String[] SWAGGER_PATHS = {
     "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html"

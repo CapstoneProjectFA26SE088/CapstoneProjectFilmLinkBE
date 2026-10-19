@@ -28,7 +28,7 @@ filmlink:
     signed-url-ttl: ${STORAGE_SIGNED_URL_TTL:PT15M}
     local:
       # Bắt buộc khi provider = local. Đường dẫn Windows viết bằng "/" (.env đọc như .properties).
-      root-dir: ${STORAGE_LOCAL_ROOT}
+      root-dir: ${STORAGE_LOCAL_ROOT:D:/capstone/FA26SE088-backend/uploads}
       public-base-url: ${STORAGE_PUBLIC_BASE_URL:http://localhost:${server.port}}
       # Khoá HMAC-SHA256 Base64 >= 256 bit, riêng với JWT_SECRET. Không có giá trị mặc định.
       signing-secret: ${STORAGE_SIGNING_SECRET}
