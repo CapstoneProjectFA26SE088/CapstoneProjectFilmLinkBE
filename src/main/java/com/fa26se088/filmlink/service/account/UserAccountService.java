@@ -2,6 +2,7 @@ package com.fa26se088.filmlink.service.account;
 
 import com.fa26se088.filmlink.dto.account.request.ChangePasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.RegisterRequest;
+import com.fa26se088.filmlink.dto.account.request.ResendOtpRequest;
 import com.fa26se088.filmlink.dto.account.request.VerifyEmailRequest;
 import com.fa26se088.filmlink.dto.account.response.TokenResponse;
 import com.fa26se088.filmlink.dto.account.response.UserAccountResponse;
@@ -22,6 +23,21 @@ public interface UserAccountService {
    * lần trả {@code ACCOUNT_OTP_INVALID} (MSG11).
    */
   TokenResponse verifyEmail(VerifyEmailRequest request);
+
+  /**
+   * UC06 / UH-36: gửi lại mã OTP qua email.
+   *
+   * <ul>
+   *   <li>Khoảng cách giữa hai lần gửi liên tiếp phải ≥ 60 giây (nếu không: ném {@code
+   *       ACCOUNT_OTP_RESEND_TOO_FAST}, MSG12).
+   *   <li>Tối đa 3 lần gửi OTP trong cửa sổ 15 phút (nếu không: ném {@code
+   *       ACCOUNT_OTP_RESEND_LIMIT_EXCEEDED}, MSG12).
+   *   <li>Vô hiệu hoá toàn bộ mã OTP cũ chưa sử dụng của tài khoản.
+   * </ul>
+   *
+   * @param request thông tin email và mục đích OTP cần gửi lại
+   */
+  void resendOtp(ResendOtpRequest request);
 
   /** Thông tin tài khoản đang đăng nhập. */
   UserAccountResponse getCurrentAccount(Long accountId);

@@ -13,6 +13,7 @@ import static org.mockito.Mockito.when;
 import com.fa26se088.filmlink.client.notification.EmailClient;
 import com.fa26se088.filmlink.dto.account.request.ChangePasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.RegisterRequest;
+import com.fa26se088.filmlink.dto.account.request.ResendOtpRequest;
 import com.fa26se088.filmlink.dto.account.request.VerifyEmailRequest;
 import com.fa26se088.filmlink.dto.account.response.TokenResponse;
 import com.fa26se088.filmlink.dto.account.response.UserAccountResponse;
@@ -196,6 +197,123 @@ class UserAccountServiceImplTest {
     when(userAccountRepository.findByEmail(EMAIL)).thenReturn(Optional.of(account));
 
     assertOtpInvalid(() -> service.verifyEmail(new VerifyEmailRequest(EMAIL, OTP)));
+  }
+
+  // --- resendOtp (UC06, UH-36, MSG12) ---
+
+  /**
+   * Yêu cầu gửi lại hợp lệ: đã qua ≥ 60 giây và chưa quá 3 lần / 15 phút.
+   * Mã cũ bị vô hiệu hoá và mã mới được gửi qua email.
+   */
+  @Test
+  void resendOtp_validRequest_invalidatesOldOtpsAndSendsNewOne() {
+    UserAccount account = pendingAccount();
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
+
+    OtpCode previousOtp = otpCode(account, Instant.now().plusSeconds(180), (short) 0);
+    ReflectionTestUtils.setField(previousOtp, "createdAt", Instant.now().minusSeconds(70));
+    when(otpCodeRepository.findFirstByUserAccountIdAndPurposeOrderByCreatedAtDesc(
+            1L, OtpPurpose.EMAIL_VERIFICATION))
+        .thenReturn(Optional.of(previousOtp));
+
+    when(otpCodeRepository.countByUserAccountIdAndPurposeAndCreatedAtAfter(
+            eq(1L), eq(OtpPurpose.EMAIL_VERIFICATION), any(Instant.class)))
+        .thenReturn(1L);
+
+    service.resendOtp(new ResendOtpRequest(EMAIL));
+
+    // Vô hiệu hoá mã cũ
+    verify(otpCodeRepository).invalidateAllUnconsumed(eq(1L), eq(OtpPurpose.EMAIL_VERIFICATION), any(Instant.class));
+    // Lưu mã mới
+    verify(otpCodeRepository).save(any(OtpCode.class));
+    // Gửi email mã mới
+    verify(emailClient).send(eq(EMAIL), eq("FilmLink - Mã xác thực email"), anyString());
+  }
+
+  /**
+   * UH-36: gửi lại quá nhanh (< 60 giây) → 429 ACCOUNT_OTP_RESEND_TOO_FAST (MSG12).
+   */
+  @Test
+  void resendOtp_tooFast_throwsAccountOtpResendTooFast() {
+    UserAccount account = pendingAccount();
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
+
+    OtpCode recentOtp = otpCode(account, Instant.now().plusSeconds(250), (short) 0);
+    ReflectionTestUtils.setField(recentOtp, "createdAt", Instant.now().minusSeconds(30)); // 30s trước (< 60s)
+    when(otpCodeRepository.findFirstByUserAccountIdAndPurposeOrderByCreatedAtDesc(
+            1L, OtpPurpose.EMAIL_VERIFICATION))
+        .thenReturn(Optional.of(recentOtp));
+
+    assertThatThrownBy(() -> service.resendOtp(new ResendOtpRequest(EMAIL)))
+        .isInstanceOfSatisfying(
+            BusinessException.class,
+            ex -> {
+              assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.ACCOUNT_OTP_RESEND_TOO_FAST);
+              assertThat(ex.getErrorCode().getMessageCode()).isEqualTo("MSG12");
+            });
+
+    verify(otpCodeRepository, never()).invalidateAllUnconsumed(any(), any(), any());
+    verify(otpCodeRepository, never()).save(any());
+    verify(emailClient, never()).send(any(), any(), any());
+  }
+
+  /**
+   * UH-36: gửi lại quá 3 lần trong 15 phút → 429 ACCOUNT_OTP_RESEND_LIMIT_EXCEEDED (MSG12).
+   */
+  @Test
+  void resendOtp_limitExceeded_throwsAccountOtpResendLimitExceeded() {
+    UserAccount account = pendingAccount();
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
+
+    OtpCode previousOtp = otpCode(account, Instant.now().plusSeconds(180), (short) 0);
+    ReflectionTestUtils.setField(previousOtp, "createdAt", Instant.now().minusSeconds(70));
+    when(otpCodeRepository.findFirstByUserAccountIdAndPurposeOrderByCreatedAtDesc(
+            1L, OtpPurpose.EMAIL_VERIFICATION))
+        .thenReturn(Optional.of(previousOtp));
+
+    when(otpCodeRepository.countByUserAccountIdAndPurposeAndCreatedAtAfter(
+            eq(1L), eq(OtpPurpose.EMAIL_VERIFICATION), any(Instant.class)))
+        .thenReturn(3L); // Đã có 3 mã trong 15 phút
+
+    assertThatThrownBy(() -> service.resendOtp(new ResendOtpRequest(EMAIL)))
+        .isInstanceOfSatisfying(
+            BusinessException.class,
+            ex -> {
+              assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.ACCOUNT_OTP_RESEND_LIMIT_EXCEEDED);
+              assertThat(ex.getErrorCode().getMessageCode()).isEqualTo("MSG12");
+            });
+
+    verify(otpCodeRepository, never()).invalidateAllUnconsumed(any(), any(), any());
+    verify(otpCodeRepository, never()).save(any());
+    verify(emailClient, never()).send(any(), any(), any());
+  }
+
+  @Test
+  void resendOtp_accountNotFound_throwsResourceNotFound() {
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.empty());
+
+    assertThatThrownBy(() -> service.resendOtp(new ResendOtpRequest(EMAIL)))
+        .isInstanceOfSatisfying(
+            BusinessException.class,
+            ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.RESOURCE_NOT_FOUND));
+
+    verify(otpCodeRepository, never()).save(any());
+    verify(emailClient, never()).send(any(), any(), any());
+  }
+
+  @Test
+  void resendOtp_accountAlreadyActive_throwsBusinessRuleViolation() {
+    UserAccount account = pendingAccount();
+    account.setStatus(UserAccountStatus.ACTIVE);
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
+
+    assertThatThrownBy(() -> service.resendOtp(new ResendOtpRequest(EMAIL)))
+        .isInstanceOfSatisfying(
+            BusinessException.class,
+            ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.BUSINESS_RULE_VIOLATION));
+
+    verify(otpCodeRepository, never()).save(any());
+    verify(emailClient, never()).send(any(), any(), any());
   }
 
   private void stubLookup(UserAccount account, OtpCode otpCode) {

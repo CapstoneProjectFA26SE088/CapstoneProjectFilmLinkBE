@@ -31,6 +31,10 @@ public enum ErrorCode {
   ACCOUNT_TEMPORARILY_LOCKED(HttpStatus.TOO_MANY_REQUESTS, "MSG10"),
   ACCOUNT_INVALID_TOKEN(HttpStatus.UNAUTHORIZED, null),
   ACCOUNT_OTP_INVALID(HttpStatus.UNPROCESSABLE_CONTENT, "MSG11"),
+  /** UH-36: gửi lại OTP quá nhanh (chưa đủ 60 giây giữa 2 lần gửi liên tiếp) (MSG12). */
+  ACCOUNT_OTP_RESEND_TOO_FAST(HttpStatus.TOO_MANY_REQUESTS, "MSG12"),
+  /** UH-36: gửi lại OTP quá số lần cho phép (tối đa 3 lần trong cửa sổ 15 phút) (MSG12). */
+  ACCOUNT_OTP_RESEND_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "MSG12"),
   ACCOUNT_REGISTRATION_REJECTED(HttpStatus.UNPROCESSABLE_CONTENT, null),
   /** UC02: mật khẩu cũ không đúng khi đổi mật khẩu. */
   ACCOUNT_OLD_PASSWORD_INVALID(HttpStatus.BAD_REQUEST, null),

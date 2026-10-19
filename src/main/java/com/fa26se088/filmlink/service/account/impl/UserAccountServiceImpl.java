@@ -3,6 +3,7 @@ package com.fa26se088.filmlink.service.account.impl;
 import com.fa26se088.filmlink.client.notification.EmailClient;
 import com.fa26se088.filmlink.dto.account.request.ChangePasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.RegisterRequest;
+import com.fa26se088.filmlink.dto.account.request.ResendOtpRequest;
 import com.fa26se088.filmlink.dto.account.request.VerifyEmailRequest;
 import com.fa26se088.filmlink.dto.account.response.TokenResponse;
 import com.fa26se088.filmlink.dto.account.response.UserAccountResponse;
@@ -26,6 +27,7 @@ import com.fa26se088.filmlink.utils.EmailUtils;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -38,6 +40,15 @@ public class UserAccountServiceImpl implements UserAccountService {
 
   /** UC06: OTP hiệu lực 5 phút. */
   static final Duration OTP_TTL = Duration.ofMinutes(5);
+
+  /** UC06 / UH-36: khoảng cách tối thiểu giữa 2 lần gửi OTP liên tiếp (60 giây). */
+  static final int OTP_RESEND_COOLDOWN_SECONDS = 60;
+
+  /** UC06 / UH-36: tối đa 3 lần tạo mã OTP trong cửa sổ 15 phút. */
+  static final int OTP_MAX_PER_WINDOW = 3;
+
+  /** UC06 / UH-36: độ dài cửa sổ giới hạn gửi lại OTP (15 phút). */
+  static final Duration OTP_RESEND_WINDOW = Duration.ofMinutes(15);
 
   private static final int OTP_BOUND = 1_000_000;
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
@@ -83,7 +94,7 @@ public class UserAccountServiceImpl implements UserAccountService {
       throw registrationRejected();
     }
 
-    sendEmailVerificationOtp(account);
+    sendEmailVerificationOtp(account, Instant.now());
     return userAccountMapper.toResponse(account);
   }
 
@@ -119,6 +130,75 @@ public class UserAccountServiceImpl implements UserAccountService {
     account.setStatus(UserAccountStatus.ACTIVE);
     account.setEmailVerifiedAt(now);
     return authenticationService.issueTokens(account.getId());
+  }
+
+  /**
+   * UC06 / UH-36: gửi lại mã OTP qua email.
+   *
+   * <ul>
+   *   <li>Khoá dòng tài khoản ({@code findByEmailForUpdate}) để tuần tự hoá các yêu cầu gửi lại song song.
+   *   <li>Kiểm tra tài khoản tồn tại và đang ở trạng thái {@link UserAccountStatus#PENDING_VERIFICATION}.
+   *   <li>Kiểm tra quy tắc 60 giây (UH-36): khoảng cách với lần tạo mã gần nhất phải ≥ 60 giây.
+   *   <li>Kiểm tra quy tắc 15 phút (UH-36): trong 15 phút gần nhất không quá 3 lần tạo mã.
+   *   <li>Vô hiệu hoá toàn bộ mã OTP cũ chưa sử dụng (đặt {@code consumed_at = now}).
+   *   <li>Sinh mã OTP mới, băm BCrypt, lưu và gửi mã gốc qua email.
+   * </ul>
+   */
+  @Override
+  @Transactional
+  public void resendOtp(ResendOtpRequest request) {
+    Instant now = Instant.now();
+    String email = EmailUtils.normalize(request.email());
+    OtpPurpose purpose = request.purpose() != null ? request.purpose() : OtpPurpose.EMAIL_VERIFICATION;
+
+    UserAccount account =
+        userAccountRepository
+            .findByEmailForUpdate(email)
+            .orElseThrow(
+                () ->
+                    new BusinessException(
+                        ErrorCode.RESOURCE_NOT_FOUND, "Không tìm thấy tài khoản với email này."));
+
+    if (account.getStatus() != UserAccountStatus.PENDING_VERIFICATION) {
+      throw new BusinessException(
+          ErrorCode.BUSINESS_RULE_VIOLATION, "Tài khoản không ở trạng thái chờ xác thực email.");
+    }
+
+    // Quy tắc 60 giây: khoảng cách với lần tạo mã gần nhất phải ≥ 60 giây
+    Optional<OtpCode> latestOtp =
+        otpCodeRepository.findFirstByUserAccountIdAndPurposeOrderByCreatedAtDesc(
+            account.getId(), purpose);
+    if (latestOtp.isPresent() && latestOtp.get().getCreatedAt() != null) {
+      long secondsSinceLast = Duration.between(latestOtp.get().getCreatedAt(), now).getSeconds();
+      if (secondsSinceLast < OTP_RESEND_COOLDOWN_SECONDS) {
+        throw new BusinessException(
+            ErrorCode.ACCOUNT_OTP_RESEND_TOO_FAST,
+            "Vui lòng đợi ít nhất "
+                + (OTP_RESEND_COOLDOWN_SECONDS - secondsSinceLast)
+                + " giây trước khi yêu cầu gửi lại mã OTP.");
+      }
+    }
+
+    // Quy tắc tối đa 3 lần / 15 phút
+    Instant windowStart = now.minus(OTP_RESEND_WINDOW);
+    long countInWindow =
+        otpCodeRepository.countByUserAccountIdAndPurposeAndCreatedAtAfter(
+            account.getId(), purpose, windowStart);
+    if (countInWindow >= OTP_MAX_PER_WINDOW) {
+      throw new BusinessException(
+          ErrorCode.ACCOUNT_OTP_RESEND_LIMIT_EXCEEDED,
+          "Bạn đã vượt quá số lần yêu cầu gửi mã OTP (tối đa "
+              + OTP_MAX_PER_WINDOW
+              + " lần trong "
+              + OTP_RESEND_WINDOW.toMinutes()
+              + " phút). Vui lòng thử lại sau.");
+    }
+
+    // Vô hiệu hoá mọi mã OTP cũ chưa tiêu thụ
+    otpCodeRepository.invalidateAllUnconsumed(account.getId(), purpose, now);
+
+    // Phát hành mã mới và gửi email
+    sendEmailVerificationOtp(account, now);
   }
 
   @Override
@@ -203,13 +283,13 @@ public class UserAccountServiceImpl implements UserAccountService {
   }
 
   /** UC06 bước 2: sinh OTP bằng {@link SecureRandom}, chỉ lưu BCrypt hash, gửi mã gốc qua email. */
-  private void sendEmailVerificationOtp(UserAccount account) {
+  private void sendEmailVerificationOtp(UserAccount account, Instant now) {
     String code = String.format("%06d", SECURE_RANDOM.nextInt(OTP_BOUND));
     OtpCode otpCode = new OtpCode();
     otpCode.setUserAccount(account);
     otpCode.setPurpose(OtpPurpose.EMAIL_VERIFICATION);
     otpCode.setCodeHash(passwordEncoder.encode(code));
-    otpCode.setExpiresAt(Instant.now().plus(OTP_TTL));
+    otpCode.setExpiresAt(now.plus(OTP_TTL));
     otpCodeRepository.save(otpCode);
 
     emailClient.send(
