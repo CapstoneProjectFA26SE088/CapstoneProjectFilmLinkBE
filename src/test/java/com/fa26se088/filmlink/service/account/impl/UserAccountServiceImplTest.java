@@ -450,4 +450,97 @@ class UserAccountServiceImplTest {
     account.setStatus(UserAccountStatus.ACTIVE);
     return account;
   }
+
+  // ---------------------------------------------------------------------------
+  // purgeUnverifiedAccounts — UC06 / FND-03
+  // ---------------------------------------------------------------------------
+
+  @Test
+  void purgeUnverifiedAccounts_whenRecordsExist_deletesAndAudits() {
+    // Arrange: repository trả về 3 bản ghi cần xoá, bulk-delete xoá 3
+    when(userAccountRepository.countByStatusAndCreatedAtBefore(
+            eq(UserAccountStatus.PENDING_VERIFICATION), any()))
+        .thenReturn(3L);
+    when(userAccountRepository.deleteByStatusAndCreatedAtBefore(
+            eq(UserAccountStatus.PENDING_VERIFICATION), any()))
+        .thenReturn(3);
+
+    // Act
+    service.purgeUnverifiedAccounts();
+
+    // Assert: xoá được gọi đúng 1 lần với status PENDING_VERIFICATION
+    verify(userAccountRepository)
+        .deleteByStatusAndCreatedAtBefore(eq(UserAccountStatus.PENDING_VERIFICATION), any());
+
+    // Assert: audit SUCCESS ghi đúng action ACCOUNT_UNVERIFIED_PURGED
+    ArgumentCaptor<AuditEntry> auditCaptor = ArgumentCaptor.forClass(AuditEntry.class);
+    verify(auditLogService).recordSuccess(auditCaptor.capture());
+    AuditEntry entry = auditCaptor.getValue();
+    assertThat(entry.action()).isEqualTo(AuditAction.ACCOUNT_UNVERIFIED_PURGED);
+    assertThat(entry.targetType()).isEqualTo(AuditTargetType.USER_ACCOUNT);
+    assertThat(entry.targetId()).isNull(); // batch, không có targetId cụ thể
+    assertThat(entry.reason()).contains("3");
+  }
+
+  @Test
+  void purgeUnverifiedAccounts_whenNoRecords_skipsDeleteAndAudit() {
+    // Arrange: không có bản ghi nào cần xoá (idempotent — đã xoá rồi hoặc chưa có)
+    when(userAccountRepository.countByStatusAndCreatedAtBefore(
+            eq(UserAccountStatus.PENDING_VERIFICATION), any()))
+        .thenReturn(0L);
+
+    // Act
+    service.purgeUnverifiedAccounts();
+
+    // Assert: bulk-delete KHÔNG được gọi khi count = 0
+    verify(userAccountRepository, never())
+        .deleteByStatusAndCreatedAtBefore(any(), any());
+
+    // Assert: audit KHÔNG được ghi khi không có gì để xoá
+    verify(auditLogService, never()).recordSuccess(any());
+  }
+
+  @Test
+  void purgeUnverifiedAccounts_idempotent_runAgainAfterDeletion() {
+    // Arrange: lần đầu chạy xoá 2 bản ghi; lần hai count = 0 (idempotent)
+    when(userAccountRepository.countByStatusAndCreatedAtBefore(
+            eq(UserAccountStatus.PENDING_VERIFICATION), any()))
+        .thenReturn(2L)
+        .thenReturn(0L);
+    when(userAccountRepository.deleteByStatusAndCreatedAtBefore(
+            eq(UserAccountStatus.PENDING_VERIFICATION), any()))
+        .thenReturn(2);
+
+    // Act: chạy job 2 lần
+    service.purgeUnverifiedAccounts();
+    service.purgeUnverifiedAccounts();
+
+    // Assert: delete chỉ được gọi 1 lần (lần 2 count=0 nên skip)
+    verify(userAccountRepository)
+        .deleteByStatusAndCreatedAtBefore(eq(UserAccountStatus.PENDING_VERIFICATION), any());
+    // Audit cũng chỉ 1 lần
+    verify(auditLogService).recordSuccess(any());
+  }
+
+  @Test
+  void purgeUnverifiedAccounts_onlyDeletesPendingVerification() {
+    // Chứng minh query luôn truyền đúng status PENDING_VERIFICATION (không xoá ACTIVE)
+    when(userAccountRepository.countByStatusAndCreatedAtBefore(
+            eq(UserAccountStatus.PENDING_VERIFICATION), any()))
+        .thenReturn(1L);
+    when(userAccountRepository.deleteByStatusAndCreatedAtBefore(
+            eq(UserAccountStatus.PENDING_VERIFICATION), any()))
+        .thenReturn(1);
+
+    service.purgeUnverifiedAccounts();
+
+    // Verify: count và delete chỉ nhận đúng PENDING_VERIFICATION — không bao giờ ACTIVE
+    verify(userAccountRepository)
+        .countByStatusAndCreatedAtBefore(eq(UserAccountStatus.PENDING_VERIFICATION), any());
+    verify(userAccountRepository)
+        .deleteByStatusAndCreatedAtBefore(eq(UserAccountStatus.PENDING_VERIFICATION), any());
+    verify(userAccountRepository, never())
+        .deleteByStatusAndCreatedAtBefore(eq(UserAccountStatus.ACTIVE), any());
+  }
 }
+

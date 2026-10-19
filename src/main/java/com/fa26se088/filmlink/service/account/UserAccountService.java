@@ -52,4 +52,19 @@ public interface UserAccountService {
    * @param request thông tin mật khẩu cũ và mật khẩu mới
    */
   void changePassword(Long accountId, ChangePasswordRequest request);
+
+  /**
+   * UC06 / FND-03: xoá hàng loạt tài khoản {@code PENDING_VERIFICATION} được tạo trước {@code
+   * deadline} (mặc định = {@code now() − 24h}).
+   *
+   * <ul>
+   *   <li>Idempotent: chạy lại không lỗi.
+   *   <li>Log số bản ghi đã xử lý.
+   *   <li>Ghi audit actor System ({@code ACCOUNT_UNVERIFIED_PURGED}).
+   * </ul>
+   *
+   * <p>Được gọi từ {@code AccountPurgeUnverifiedJob}; không dùng ở API.
+   */
+  void purgeUnverifiedAccounts();
 }
+

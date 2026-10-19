@@ -29,11 +29,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class UserAccountServiceImpl implements UserAccountService {
@@ -49,6 +51,12 @@ public class UserAccountServiceImpl implements UserAccountService {
 
   /** UC06 / UH-36: độ dài cửa sổ giới hạn gửi lại OTP (15 phút). */
   static final Duration OTP_RESEND_WINDOW = Duration.ofMinutes(15);
+
+  /**
+   * UC06 / FND-03: tài khoản PENDING_VERIFICATION chưa xác thực email sau 24 giờ sẽ bị xoá bởi
+   * job {@code AccountPurgeUnverifiedJob}.
+   */
+  static final Duration UNVERIFIED_PURGE_AFTER = Duration.ofHours(24);
 
   private static final int OTP_BOUND = 1_000_000;
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
@@ -102,8 +110,8 @@ public class UserAccountServiceImpl implements UserAccountService {
    * UC06 bước 3: OTP 6 số, hiệu lực 5 phút, sai tối đa 5 lần. Sai, hết hạn hoặc đã sai đủ 5 lần
    * đều trả MSG11.
    *
-   * <p>{@code noRollbackFor}: khi OTP sai, số lần sai phải được lưu dù method ném lỗi; nếu rollback
-   * thì người dùng thử được vô hạn lần.
+   * <p>{@code noRollbackFor}: khi OTP sai, số lần sai phải được lưu dù method ném lỗi; nếu
+   * rollback thì người dùng thử được vô hạn lần.
    */
   @Override
   @Transactional(noRollbackFor = BusinessException.class)
@@ -136,8 +144,10 @@ public class UserAccountServiceImpl implements UserAccountService {
    * UC06 / UH-36: gửi lại mã OTP qua email.
    *
    * <ul>
-   *   <li>Khoá dòng tài khoản ({@code findByEmailForUpdate}) để tuần tự hoá các yêu cầu gửi lại song song.
-   *   <li>Kiểm tra tài khoản tồn tại và đang ở trạng thái {@link UserAccountStatus#PENDING_VERIFICATION}.
+   *   <li>Khoá dòng tài khoản ({@code findByEmailForUpdate}) để tuần tự hoá các yêu cầu gửi lại
+   *       song song.
+   *   <li>Kiểm tra tài khoản tồn tại và đang ở trạng thái {@link
+   *       UserAccountStatus#PENDING_VERIFICATION}.
    *   <li>Kiểm tra quy tắc 60 giây (UH-36): khoảng cách với lần tạo mã gần nhất phải ≥ 60 giây.
    *   <li>Kiểm tra quy tắc 15 phút (UH-36): trong 15 phút gần nhất không quá 3 lần tạo mã.
    *   <li>Vô hiệu hoá toàn bộ mã OTP cũ chưa sử dụng (đặt {@code consumed_at = now}).
@@ -149,7 +159,8 @@ public class UserAccountServiceImpl implements UserAccountService {
   public void resendOtp(ResendOtpRequest request) {
     Instant now = Instant.now();
     String email = EmailUtils.normalize(request.email());
-    OtpPurpose purpose = request.purpose() != null ? request.purpose() : OtpPurpose.EMAIL_VERIFICATION;
+    OtpPurpose purpose =
+        request.purpose() != null ? request.purpose() : OtpPurpose.EMAIL_VERIFICATION;
 
     UserAccount account =
         userAccountRepository
@@ -217,13 +228,13 @@ public class UserAccountServiceImpl implements UserAccountService {
    *
    * <ul>
    *   <li>Kiểm tra tài khoản tồn tại và đang ACTIVE.
-   *   <li>Kiểm tra mật khẩu cũ khớp với hash hiện tại: sai thì ghi audit FAILURE và ném
-   *       {@code ACCOUNT_OLD_PASSWORD_INVALID}.
-   *   <li>Kiểm tra mật khẩu mới khác mật khẩu cũ: trùng thì ném
-   *       {@code ACCOUNT_NEW_PASSWORD_SAME_AS_OLD}.
+   *   <li>Kiểm tra mật khẩu cũ khớp với hash hiện tại: sai thì ghi audit FAILURE và ném {@code
+   *       ACCOUNT_OLD_PASSWORD_INVALID}.
+   *   <li>Kiểm tra mật khẩu mới khác mật khẩu cũ: trùng thì ném {@code
+   *       ACCOUNT_NEW_PASSWORD_SAME_AS_OLD}.
    *   <li>Lưu mật khẩu mới băm bằng BCrypt.
-   *   <li>Thu hồi mọi refresh token qua {@link AuthenticationService#revokeAllTokens(Long)}
-   *       để đăng xuất mọi phiên khác (dùng index {@code ix_refresh_tokens_active_by_account}).
+   *   <li>Thu hồi mọi refresh token qua {@link AuthenticationService#revokeAllTokens(Long)} để
+   *       đăng xuất mọi phiên khác (dùng index {@code ix_refresh_tokens_active_by_account}).
    *   <li>Gửi email cảnh báo bảo mật tới địa chỉ của tài khoản.
    *   <li>Ghi audit log SUCCESS (không chứa thông tin mật khẩu).
    * </ul>
@@ -236,7 +247,9 @@ public class UserAccountServiceImpl implements UserAccountService {
             .findById(accountId)
             .filter(found -> found.getStatus() == UserAccountStatus.ACTIVE)
             .orElseThrow(
-                () -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Không tìm thấy tài khoản."));
+                () ->
+                    new BusinessException(
+                        ErrorCode.RESOURCE_NOT_FOUND, "Không tìm thấy tài khoản."));
 
     if (!passwordEncoder.matches(request.oldPassword(), account.getPasswordHash())) {
       auditLogService.recordFailure(
@@ -254,8 +267,7 @@ public class UserAccountServiceImpl implements UserAccountService {
     if (request.oldPassword().equals(request.newPassword())
         || passwordEncoder.matches(request.newPassword(), account.getPasswordHash())) {
       throw new BusinessException(
-          ErrorCode.ACCOUNT_NEW_PASSWORD_SAME_AS_OLD,
-          "Mật khẩu mới phải khác mật khẩu hiện tại.");
+          ErrorCode.ACCOUNT_NEW_PASSWORD_SAME_AS_OLD, "Mật khẩu mới phải khác mật khẩu hiện tại.");
     }
 
     account.setPasswordHash(passwordEncoder.encode(request.newPassword()));
@@ -278,6 +290,54 @@ public class UserAccountServiceImpl implements UserAccountService {
             AuditTargetType.USER_ACCOUNT,
             accountId,
             "Người dùng tự đổi mật khẩu",
+            null,
+            null));
+  }
+
+  /**
+   * UC06 / FND-03: xoá hàng loạt tài khoản {@code PENDING_VERIFICATION} được tạo từ hơn 24 giờ
+   * trước. Idempotent — chạy lại khi không còn bản ghi phù hợp thì xoá 0 dòng, không lỗi.
+   *
+   * <ul>
+   *   <li>Đếm trước để log rõ ràng số bản ghi sẽ bị xoá.
+   *   <li>Xoá bằng JPQL bulk-delete (1 câu DELETE duy nhất, tận dụng index {@code
+   *       ix_user_accounts_unverified_created}).
+   *   <li>Ghi audit SUCCESS — actor là System vì Scheduler không có SecurityContext.
+   * </ul>
+   */
+  @Override
+  @Transactional
+  public void purgeUnverifiedAccounts() {
+    Instant deadline = Instant.now().minus(UNVERIFIED_PURGE_AFTER);
+
+    // Đếm trước để ghi log số bản ghi sẽ bị xoá; idempotent nếu job chạy lại sau khi xoá xong
+    long toDelete =
+        userAccountRepository.countByStatusAndCreatedAtBefore(
+            UserAccountStatus.PENDING_VERIFICATION, deadline);
+
+    log.info(
+        "[AccountPurgeUnverifiedJob] Tìm thấy {} tài khoản PENDING_VERIFICATION tạo trước {} cần xoá.",
+        toDelete,
+        deadline);
+
+    if (toDelete == 0) {
+      log.info("[AccountPurgeUnverifiedJob] Không có bản ghi nào cần xoá. Job kết thúc.");
+      return;
+    }
+
+    int deleted =
+        userAccountRepository.deleteByStatusAndCreatedAtBefore(
+            UserAccountStatus.PENDING_VERIFICATION, deadline);
+
+    log.info("[AccountPurgeUnverifiedJob] Đã xoá {} tài khoản chưa xác thực.", deleted);
+
+    // Ghi audit actor System (SecurityContext trống trong Scheduler — auditLogService tự ghi System)
+    auditLogService.recordSuccess(
+        new AuditEntry(
+            AuditAction.ACCOUNT_UNVERIFIED_PURGED,
+            AuditTargetType.USER_ACCOUNT,
+            null,
+            "Job xoá " + deleted + " tài khoản PENDING_VERIFICATION tạo trước " + deadline,
             null,
             null));
   }
