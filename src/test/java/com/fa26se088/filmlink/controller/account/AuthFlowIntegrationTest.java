@@ -11,9 +11,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fa26se088.filmlink.client.notification.EmailClient;
 import com.fa26se088.filmlink.entity.account.OtpCode;
+import com.fa26se088.filmlink.entity.account.UserAccount;
 import com.fa26se088.filmlink.repository.account.OtpCodeRepository;
 import com.fa26se088.filmlink.repository.account.UserAccountRepository;
 import com.jayway.jsonpath.JsonPath;
+import java.time.Instant;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -151,6 +153,58 @@ class AuthFlowIntegrationTest {
     postJson("/api/v1/auth/register", registerBody(email))
         .andExpect(status().isUnprocessableContent())
         .andExpect(jsonPath("$.errorCode").value("ACCOUNT_REGISTRATION_REJECTED"));
+  }
+
+  /**
+   * NFR-SEC-07 & MSG10: 5 lần sai liên tiếp trong 15 phút → khoá 15 phút.
+   * Đăng nhập đúng khi hết thời gian khoá sẽ thành công và reset bộ đếm.
+   */
+  @Test
+  void loginLockoutAfterFiveFailedAttempts() throws Exception {
+    postJson("/api/v1/auth/register", registerBody(email)).andExpect(status().isCreated());
+    postJson("/api/v1/auth/verify-email", verifyBody(capturedOtp())).andExpect(status().isOk());
+
+    // 4 lần đầu nhập sai: 401 MSG09, chưa bị khóa
+    for (int i = 1; i <= 4; i++) {
+      postJson("/api/v1/auth/login", loginBody("wrong-pass" + i))
+          .andExpect(status().isUnauthorized())
+          .andExpect(jsonPath("$.errorCode").value("ACCOUNT_INVALID_CREDENTIALS"))
+          .andExpect(jsonPath("$.messageCode").value("MSG09"));
+    }
+
+    UserAccount account = userAccountRepository.findByEmail(email).orElseThrow();
+    assertThat(account.getFailedLoginCount()).isEqualTo((short) 4);
+    assertThat(account.getLoginLockedUntil()).isNull();
+
+    // Lần thứ 5 sai: trả 401 MSG09 nhưng kích hoạt khóa tạm thời
+    postJson("/api/v1/auth/login", loginBody("wrong-pass5"))
+        .andExpect(status().isUnauthorized())
+        .andExpect(jsonPath("$.errorCode").value("ACCOUNT_INVALID_CREDENTIALS"))
+        .andExpect(jsonPath("$.messageCode").value("MSG09"));
+
+    account = userAccountRepository.findByEmail(email).orElseThrow();
+    assertThat(account.getFailedLoginCount()).isEqualTo((short) 5);
+    assertThat(account.getLoginLockedUntil()).isNotNull();
+
+    // Lần thứ 6 với mật khẩu ĐÚNG: bị từ chối 429 MSG10 vì đang trong 15 phút khóa
+    postJson("/api/v1/auth/login", loginBody(PASSWORD))
+        .andExpect(status().isTooManyRequests())
+        .andExpect(jsonPath("$.errorCode").value("ACCOUNT_TEMPORARILY_LOCKED"))
+        .andExpect(jsonPath("$.messageCode").value("MSG10"));
+
+    // Giả lập hết thời gian khóa 15 phút
+    account.setLoginLockedUntil(Instant.now().minusSeconds(1));
+    userAccountRepository.save(account);
+
+    // Đăng nhập lại với mật khẩu đúng: thành công và reset bộ đếm về 0, khóa về null
+    postJson("/api/v1/auth/login", loginBody(PASSWORD))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.accessToken").isNotEmpty())
+        .andExpect(jsonPath("$.refreshToken").isNotEmpty());
+
+    account = userAccountRepository.findByEmail(email).orElseThrow();
+    assertThat(account.getFailedLoginCount()).isEqualTo((short) 0);
+    assertThat(account.getLoginLockedUntil()).isNull();
   }
 
   @Test

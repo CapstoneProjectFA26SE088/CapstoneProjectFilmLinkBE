@@ -80,7 +80,8 @@ class AuthenticationServiceImplTest {
   @Test
   void login_validCredentials_issuesTokens() {
     UserAccount account = account(UserAccountStatus.ACTIVE);
-    when(userAccountRepository.findByEmail(EMAIL)).thenReturn(Optional.of(account));
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
+
 
     TokenResponse response = service.login(new LoginRequest(" Photographer@Example.com ", PASSWORD));
 
@@ -100,8 +101,8 @@ class AuthenticationServiceImplTest {
 
   @Test
   void login_wrongPassword_returnsMsg09() {
-    when(userAccountRepository.findByEmail(EMAIL))
-        .thenReturn(Optional.of(account(UserAccountStatus.ACTIVE)));
+    UserAccount account = account(UserAccountStatus.ACTIVE);
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
 
     assertError(() -> service.login(new LoginRequest(EMAIL, "wrong-pass1")), ErrorCode.ACCOUNT_INVALID_CREDENTIALS);
     assertThat(ErrorCode.ACCOUNT_INVALID_CREDENTIALS.getMessageCode()).isEqualTo("MSG09");
@@ -109,14 +110,14 @@ class AuthenticationServiceImplTest {
 
   @Test
   void login_unknownEmail_returnsSameErrorAsWrongPassword() {
-    when(userAccountRepository.findByEmail(EMAIL)).thenReturn(Optional.empty());
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.empty());
 
     assertError(() -> service.login(new LoginRequest(EMAIL, PASSWORD)), ErrorCode.ACCOUNT_INVALID_CREDENTIALS);
   }
 
   @Test
   void login_deletedAccount_treatedAsInvalidCredentials() {
-    when(userAccountRepository.findByEmail(EMAIL))
+    when(userAccountRepository.findByEmailForUpdate(EMAIL))
         .thenReturn(Optional.of(account(UserAccountStatus.DELETED)));
 
     assertError(() -> service.login(new LoginRequest(EMAIL, PASSWORD)), ErrorCode.ACCOUNT_INVALID_CREDENTIALS);
@@ -126,7 +127,7 @@ class AuthenticationServiceImplTest {
   void login_lockedAccount_returnsLockReasonWithoutTokens() {
     UserAccount account = account(UserAccountStatus.LOCKED);
     account.setLockReason("Vi phạm điều khoản sử dụng");
-    when(userAccountRepository.findByEmail(EMAIL)).thenReturn(Optional.of(account));
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
 
     assertThatThrownBy(() -> service.login(new LoginRequest(EMAIL, PASSWORD)))
         .isInstanceOfSatisfying(
@@ -141,7 +142,7 @@ class AuthenticationServiceImplTest {
   /** Mật khẩu sai thì không tiết lộ tài khoản đang bị khoá. */
   @Test
   void login_lockedAccountWithWrongPassword_returnsMsg09() {
-    when(userAccountRepository.findByEmail(EMAIL))
+    when(userAccountRepository.findByEmailForUpdate(EMAIL))
         .thenReturn(Optional.of(account(UserAccountStatus.LOCKED)));
 
     assertError(() -> service.login(new LoginRequest(EMAIL, "wrong-pass1")), ErrorCode.ACCOUNT_INVALID_CREDENTIALS);
@@ -149,7 +150,7 @@ class AuthenticationServiceImplTest {
 
   @Test
   void login_pendingVerification_returnsNotVerified() {
-    when(userAccountRepository.findByEmail(EMAIL))
+    when(userAccountRepository.findByEmailForUpdate(EMAIL))
         .thenReturn(Optional.of(account(UserAccountStatus.PENDING_VERIFICATION)));
 
     assertError(() -> service.login(new LoginRequest(EMAIL, PASSWORD)), ErrorCode.ACCOUNT_NOT_VERIFIED);
@@ -248,6 +249,140 @@ class AuthenticationServiceImplTest {
   void revokeAllTokens_callsRepository() {
     service.revokeAllTokens(1L);
     verify(refreshTokenRepository).revokeAllActiveByAccountId(eq(1L), any(Instant.class));
+  }
+
+  // --- login-lock (NFR-SEC-07) ---
+
+  /**
+   * 4 lần sai chưa bị khoá; lần thứ 5 mới khóa.
+   * Kiểm tra: {@code failedLoginCount} tăng dần, {@code loginLockedUntil} chưa được đặt sau 4 lần.
+   */
+  @Test
+  void login_wrongPassword_incrementsFailedCount() {
+    UserAccount account = account(UserAccountStatus.ACTIVE);
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
+
+    for (int i = 1; i <= 4; i++) {
+      assertError(
+          () -> service.login(new LoginRequest(EMAIL, "wrong-pass99")),
+          ErrorCode.ACCOUNT_INVALID_CREDENTIALS);
+    }
+    assertThat(account.getFailedLoginCount()).isEqualTo((short) 4);
+    assertThat(account.getLoginLockedUntil()).isNull();
+  }
+
+  /**
+   * NFR-SEC-07: lần thứ 5 sai → {@code loginLockedUntil} được đặt ~ NOW + 15 phút.
+   * Lần thứ 6 với mật khẩu đúng → vẫn trả {@code ACCOUNT_TEMPORARILY_LOCKED}.
+   */
+  @Test
+  void login_fiveWrongAttempts_temporarilyLocksAccount() {
+    UserAccount account = account(UserAccountStatus.ACTIVE);
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
+
+    // 5 lần sai liên tiếp.
+    for (int i = 0; i < AuthenticationServiceImpl.LOGIN_MAX_FAILURES; i++) {
+      assertError(
+          () -> service.login(new LoginRequest(EMAIL, "wrong-pass99")),
+          ErrorCode.ACCOUNT_INVALID_CREDENTIALS);
+    }
+
+    // Mật khẩu đúng vẫn bị từ chối vì đang trong thời gian khoá.
+    assertError(
+        () -> service.login(new LoginRequest(EMAIL, PASSWORD)),
+        ErrorCode.ACCOUNT_TEMPORARILY_LOCKED);
+    assertThat(account.getFailedLoginCount())
+        .isEqualTo((short) AuthenticationServiceImpl.LOGIN_MAX_FAILURES);
+    assertThat(account.getLoginLockedUntil())
+        .isBetween(
+            Instant.now().plus(Duration.ofMinutes(14)),
+            Instant.now().plus(Duration.ofMinutes(16)));
+    verify(refreshTokenRepository, never()).save(any());
+  }
+
+  /**
+   * Sau khi hết 15 phút, đăng nhập lại bằng mật khẩu đúng → thành công và reset bộ đếm.
+   */
+  @Test
+  void login_afterLockExpires_allowsLoginAndResetsCounter() {
+    UserAccount account = account(UserAccountStatus.ACTIVE);
+    // Giả lập: tài khoản đã bị khoá nhưng thời gian khoá đã hết.
+    account.setFailedLoginCount((short) AuthenticationServiceImpl.LOGIN_MAX_FAILURES);
+    account.setLoginLockedUntil(Instant.now().minusSeconds(1)); // đã qua
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
+
+    TokenResponse response = service.login(new LoginRequest(EMAIL, PASSWORD));
+
+    assertThat(response.tokenType()).isEqualTo("Bearer");
+    assertThat(account.getFailedLoginCount()).isEqualTo((short) 0);
+    assertThat(account.getLoginLockedUntil()).isNull();
+  }
+
+  /**
+   * Đăng nhập đúng reset {@code failedLoginCount} về 0 dù trước đó đã có lần sai.
+   */
+  @Test
+  void login_successAfterSomeFailures_resetsCounter() {
+    UserAccount account = account(UserAccountStatus.ACTIVE);
+    account.setFailedLoginCount((short) 3); // giả lập đã sai 3 lần trước đó
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
+
+    service.login(new LoginRequest(EMAIL, PASSWORD));
+
+    assertThat(account.getFailedLoginCount()).isEqualTo((short) 0);
+    assertThat(account.getLoginLockedUntil()).isNull();
+  }
+
+  /**
+   * Email không tồn tại: không tăng counter (không có account để tăng), nhưng vẫn gọi
+   * passwordEncoder.matches() để timing-safe.
+   */
+  @Test
+  void login_unknownEmail_noCounterIncrement_returnsMsg09() {
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.empty());
+
+    assertError(
+        () -> service.login(new LoginRequest(EMAIL, "any-pass123")),
+        ErrorCode.ACCOUNT_INVALID_CREDENTIALS);
+    // Không có account nào được gọi save().
+    verify(userAccountRepository, never()).save(any());
+  }
+
+  /**
+   * Sau khi hết 15 phút khoá, nếu lần thử tiếp theo sai mật khẩu, bộ đếm bắt đầu chu kỳ mới (1)
+   * và không khoá tiếp ngay.
+   */
+  @Test
+  void login_afterLockExpires_wrongPassword_startsNewCycle() {
+    UserAccount account = account(UserAccountStatus.ACTIVE);
+    account.setFailedLoginCount((short) AuthenticationServiceImpl.LOGIN_MAX_FAILURES);
+    account.setLoginLockedUntil(Instant.now().minusSeconds(1)); // đã hết hạn khoá
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
+
+    assertError(
+        () -> service.login(new LoginRequest(EMAIL, "wrong-pass")),
+        ErrorCode.ACCOUNT_INVALID_CREDENTIALS);
+
+    assertThat(account.getFailedLoginCount()).isEqualTo((short) 1);
+    assertThat(account.getLoginLockedUntil()).isNull();
+  }
+
+  /**
+   * Cửa sổ 15 phút trôi qua kể từ lần thất bại gần nhất → lần sai tiếp theo tính lại từ 1.
+   */
+  @Test
+  void login_afterWindowExpires_wrongPassword_resetsCounterToOne() {
+    UserAccount account = account(UserAccountStatus.ACTIVE);
+    account.setFailedLoginCount((short) 3);
+    ReflectionTestUtils.setField(account, "updatedAt", Instant.now().minus(Duration.ofMinutes(16)));
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
+
+    assertError(
+        () -> service.login(new LoginRequest(EMAIL, "wrong-pass")),
+        ErrorCode.ACCOUNT_INVALID_CREDENTIALS);
+
+    assertThat(account.getFailedLoginCount()).isEqualTo((short) 1);
+    assertThat(account.getLoginLockedUntil()).isNull();
   }
 
   private static void assertError(ThrowingCallable call, ErrorCode expected) {
