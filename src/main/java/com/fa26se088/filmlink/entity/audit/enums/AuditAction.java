@@ -10,5 +10,11 @@ package com.fa26se088.filmlink.entity.audit.enums;
  */
 public enum AuditAction {
   // --- account ---
-  ACCOUNT_PASSWORD_CHANGED
+  ACCOUNT_PASSWORD_CHANGED,
+
+  // --- masterdata (MD-02) ---
+  MASTERDATA_CREATED,
+  MASTERDATA_UPDATED,
+  MASTERDATA_STATUS_CHANGED,
+  MASTERDATA_DELETE_REJECTED
 }

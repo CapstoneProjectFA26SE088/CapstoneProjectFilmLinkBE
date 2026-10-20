@@ -12,5 +12,9 @@ public interface FilmFormatRepository extends JpaRepository<FilmFormat, Long> {
 
   List<FilmFormat> findByStatusOrderByDisplayNameAsc(CatalogStatus status);
 
+  List<FilmFormat> findAllByOrderByDisplayNameAsc();
+
   Optional<FilmFormat> findByCode(String code);
+
+  boolean existsByCode(String code);
 }

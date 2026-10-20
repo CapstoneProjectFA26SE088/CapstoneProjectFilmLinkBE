@@ -15,7 +15,6 @@ import java.util.TreeMap;
 import java.util.stream.Collectors;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
@@ -25,7 +24,6 @@ import org.springframework.stereotype.Component;
  * mock và chưa xử lý IPN.
  */
 @Component
-@RequiredArgsConstructor
 public class VnPayClient {
 
   private static final String VERSION = "2.1.0";
@@ -45,6 +43,10 @@ public class VnPayClient {
   private static final long EXPIRE_MINUTES = 15;
 
   private final VnPayProperties properties;
+
+  public VnPayClient(VnPayProperties properties) {
+    this.properties = properties;
+  }
 
   public boolean isConfigured() {
     return properties.isConfigured();
