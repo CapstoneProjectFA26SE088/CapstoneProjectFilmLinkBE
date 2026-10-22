@@ -37,8 +37,9 @@ effective-pom
 
 ### Secrets - local environment ###
 .env
-.env
+.env.local
 !.env
+env/
 
 docs
 ./docs
