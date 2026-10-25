@@ -10,5 +10,9 @@ package com.fa26se088.filmlink.entity.audit.enums;
  */
 public enum AuditAction {
   // --- account ---
-  ACCOUNT_PASSWORD_CHANGED
+  ACCOUNT_PASSWORD_CHANGED,
+
+  // --- lab ---
+  /** UC12: Film Lab Owner bật/tắt nhận đơn; before/after ghi {@code acceptingOrders}. */
+  LAB_ACCEPTING_ORDERS_CHANGED
 }

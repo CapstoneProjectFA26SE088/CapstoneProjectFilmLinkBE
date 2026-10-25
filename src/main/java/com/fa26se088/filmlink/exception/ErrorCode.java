@@ -34,6 +34,12 @@ public enum ErrorCode {
   // --- lab ---
   LAB_NOT_FOUND(HttpStatus.NOT_FOUND, null),
   LAB_ACCESS_DENIED(HttpStatus.FORBIDDEN, null),
+  /** UC12: tối đa 20 ảnh mẫu mỗi lab. */
+  LAB_IMAGE_LIMIT_REACHED(HttpStatus.UNPROCESSABLE_CONTENT, "MSG08"),
+  /** Ảnh không tồn tại hoặc thuộc lab khác (không lộ id ảnh của lab khác). */
+  LAB_IMAGE_NOT_FOUND(HttpStatus.NOT_FOUND, null),
+  /** BR-57: chưa có máy PROCESSOR và máy SCANNER đang ACTIVE thì không được bật nhận đơn. */
+  LAB_MACHINES_NOT_READY(HttpStatus.UNPROCESSABLE_CONTENT, "MSG32"),
 
   // --- payment ---
   PAYMENT_GATEWAY_NOT_CONFIGURED(HttpStatus.SERVICE_UNAVAILABLE, null),
