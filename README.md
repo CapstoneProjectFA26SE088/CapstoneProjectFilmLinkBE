@@ -236,6 +236,16 @@ Code Java theo Google Java Style (indent 2 space, không import `*`). Entity k�
   `signedUrl(blobKey)` lúc tạo response (link hết hạn sau 15 phút, không lưu lại).
 - Không có endpoint upload chung: mỗi domain tự mở endpoint multipart của mình (avatar, giấy tờ lab…) và gọi `StorageClient`.
 
+**Hồ sơ lab (LAB-01)**
+
+- Lab được tạo khi duyệt đơn đăng ký: REG-02 publish `service/account/event/LabRegistrationApprovedEvent`
+  **bên trong** transaction duyệt đơn, sau khi tạo tài khoản FILM_LAB_OWNER. Listener ở `FilmLabServiceImpl`
+  chạy đồng bộ với `propagation = MANDATORY`: tạo lab lỗi thì duyệt đơn rollback; publish ngoài transaction
+  thì lỗi `IllegalTransactionStateException`.
+- BR-57 (đủ máy mới được bật nhận đơn): `service/lab/MachineReadiness` là interface của domain `lab`;
+  `SqlMachineReadiness` là bản **tạm** đếm thẳng bảng `machines`. MCH-01 cài bản thật trong
+  `service/machine/impl` rồi **xoá** `SqlMachineReadiness` (để lại 2 bean cùng kiểu thì app không khởi động).
+
 ## 8. Quy ước git
 
 - Nhánh: `feature/<mô-tả>`, `bugfix/<mã-defect>`; tạo từ `dev`, PR vào `dev`.

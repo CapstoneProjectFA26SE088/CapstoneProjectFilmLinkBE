@@ -4,6 +4,7 @@ import com.fa26se088.filmlink.dto.account.request.LoginRequest;
 import com.fa26se088.filmlink.dto.account.request.LogoutRequest;
 import com.fa26se088.filmlink.dto.account.request.RefreshTokenRequest;
 import com.fa26se088.filmlink.dto.account.request.RegisterRequest;
+import com.fa26se088.filmlink.dto.account.request.ResendOtpRequest;
 import com.fa26se088.filmlink.dto.account.request.VerifyEmailRequest;
 import com.fa26se088.filmlink.dto.account.response.TokenResponse;
 import com.fa26se088.filmlink.dto.account.response.UserAccountResponse;
@@ -47,6 +48,16 @@ public class AuthController {
       description = "OTP đúng thì kích hoạt tài khoản và trả token. Sai hoặc hết hạn: MSG11.")
   public TokenResponse verifyEmail(@Valid @RequestBody VerifyEmailRequest request) {
     return userAccountService.verifyEmail(request);
+  }
+
+  @PostMapping("/resend-otp")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  @Operation(
+      summary = "Gửi lại mã OTP qua email (UC06, UH-36)",
+      description =
+          "Gửi lại sau ≥ 60 giây, tối đa 3 lần / 15 phút. Mã cũ bị vô hiệu hoá. Lỗi: MSG12.")
+  public void resendOtp(@Valid @RequestBody ResendOtpRequest request) {
+    userAccountService.resendOtp(request);
   }
 
   @PostMapping("/login")

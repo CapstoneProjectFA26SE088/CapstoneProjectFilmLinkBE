@@ -16,4 +16,6 @@ public enum AuditTargetType {
   FILM_FORMAT,
   SERVICE_TYPE,
   FILM_STOCK
+  // --- lab ---
+  FILM_LAB
 }

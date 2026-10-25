@@ -26,6 +26,13 @@ public interface AuthenticationService {
   TokenResponse issueTokens(Long accountId);
 
   /**
+   * UC02, UC11: thu hồi toàn bộ refresh token còn hiệu lực của tài khoản.
+   *
+   * @param accountId ID tài khoản cần thu hồi toàn bộ phiên
+   */
+  void revokeAllTokens(Long accountId);
+
+  /**
    * Nạp principal cho {@code JwtAuthenticationFilter}. Trả rỗng nếu tài khoản không tồn tại hoặc
    * không ACTIVE.
    */

@@ -39,8 +39,10 @@ effective-pom
 .env
 .env.*
 !.env.example
+env/
 
 docs
 ./docs
 docs/*
 CLAUDE.md
+docs/
