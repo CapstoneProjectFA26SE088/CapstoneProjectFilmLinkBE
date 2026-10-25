@@ -12,5 +12,9 @@ public interface FilmProcessRepository extends JpaRepository<FilmProcess, Long> 
 
   List<FilmProcess> findByStatusOrderByDisplayNameAsc(CatalogStatus status);
 
+  List<FilmProcess> findAllByOrderByDisplayNameAsc();
+
   Optional<FilmProcess> findByCode(String code);
+
+  boolean existsByCode(String code);
 }

@@ -1,5 +1,6 @@
 package com.fa26se088.filmlink.repository.masterdata;
 
+import com.fa26se088.filmlink.entity.masterdata.FilmProcess;
 import com.fa26se088.filmlink.entity.masterdata.FilmStock;
 import com.fa26se088.filmlink.entity.masterdata.enums.CatalogStatus;
 import java.util.List;
@@ -23,4 +24,18 @@ public interface FilmStockRepository extends JpaRepository<FilmStock, Long> {
   List<FilmStock> searchActiveFilmStocks(
       @Param("status") CatalogStatus status,
       @Param("query") String query);
+
+  @Query("""
+      SELECT s FROM FilmStock s
+      JOIN FETCH s.defaultFilmProcess
+      WHERE (:query IS NULL OR :query = ''
+             OR LOWER(s.stockName) LIKE LOWER(CONCAT('%', :query, '%'))
+             OR LOWER(s.manufacturer) LIKE LOWER(CONCAT('%', :query, '%')))
+      ORDER BY s.manufacturer ASC, s.stockName ASC
+      """)
+  List<FilmStock> searchAllFilmStocks(@Param("query") String query);
+
+  boolean existsByStockNameAndManufacturer(String stockName, String manufacturer);
+
+  boolean existsByDefaultFilmProcess(FilmProcess defaultFilmProcess);
 }

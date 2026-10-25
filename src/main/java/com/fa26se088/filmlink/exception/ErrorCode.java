@@ -60,7 +60,13 @@ public enum ErrorCode {
   /** Sai chữ ký và hết hạn dùng chung một mã, không tiết lộ lý do. */
   STORAGE_LINK_INVALID(HttpStatus.FORBIDDEN, null),
   /** UH-39: storage lỗi thì báo rõ, phần khác vẫn chạy. */
-  STORAGE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, null);
+  STORAGE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, null),
+
+  // --- masterdata (MD-02) ---
+  /** Mã code đã tồn tại trong bảng danh mục (BR-16). */
+  MASTERDATA_CODE_DUPLICATE(HttpStatus.CONFLICT, null),
+  /** Danh mục đang được tham chiếu, không thể xóa cứng; phải chuyển sang DISCONTINUED (BR-16). */
+  MASTERDATA_IN_USE(HttpStatus.UNPROCESSABLE_CONTENT, null);
 
   private final HttpStatus httpStatus;
   private final String messageCode;

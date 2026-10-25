@@ -12,5 +12,9 @@ public interface ServiceTypeRepository extends JpaRepository<ServiceType, Long> 
 
   List<ServiceType> findByStatusOrderByDisplayNameAsc(CatalogStatus status);
 
+  List<ServiceType> findAllByOrderByDisplayNameAsc();
+
   Optional<ServiceType> findByCode(String code);
+
+  boolean existsByCode(String code);
 }
