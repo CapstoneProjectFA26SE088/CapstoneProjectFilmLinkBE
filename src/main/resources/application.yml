@@ -36,6 +36,11 @@ filmlink:
   scheduling:
     enabled: true
   # Cron của từng job: filmlink.jobs.<tên-job>.cron (job luôn ghi zone = "Asia/Ho_Chi_Minh").
+  jobs:
+    # UC06 / FND-03: xoá tài khoản PENDING_VERIFICATION chưa xác thực email sau 24 giờ.
+    # Chạy lúc 2:00 AM giờ VN mỗi ngày (giờ thấp điểm, tránh tranh chấp tải).
+    account-purge-unverified:
+      cron: "0 0 2 * * *"
 
 spring:
   config:

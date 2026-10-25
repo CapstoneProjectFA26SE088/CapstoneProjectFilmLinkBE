@@ -11,9 +11,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fa26se088.filmlink.client.notification.EmailClient;
 import com.fa26se088.filmlink.entity.account.OtpCode;
+import com.fa26se088.filmlink.entity.account.UserAccount;
 import com.fa26se088.filmlink.repository.account.OtpCodeRepository;
 import com.fa26se088.filmlink.repository.account.UserAccountRepository;
 import com.jayway.jsonpath.JsonPath;
+import java.time.Instant;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -45,6 +47,7 @@ class AuthFlowIntegrationTest {
   @Autowired private MockMvc mockMvc;
   @Autowired private UserAccountRepository userAccountRepository;
   @Autowired private OtpCodeRepository otpCodeRepository;
+  @Autowired private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
   @MockitoBean private EmailClient emailClient;
 
@@ -153,6 +156,58 @@ class AuthFlowIntegrationTest {
         .andExpect(jsonPath("$.errorCode").value("ACCOUNT_REGISTRATION_REJECTED"));
   }
 
+  /**
+   * NFR-SEC-07 & MSG10: 5 lần sai liên tiếp trong 15 phút → khoá 15 phút.
+   * Đăng nhập đúng khi hết thời gian khoá sẽ thành công và reset bộ đếm.
+   */
+  @Test
+  void loginLockoutAfterFiveFailedAttempts() throws Exception {
+    postJson("/api/v1/auth/register", registerBody(email)).andExpect(status().isCreated());
+    postJson("/api/v1/auth/verify-email", verifyBody(capturedOtp())).andExpect(status().isOk());
+
+    // 4 lần đầu nhập sai: 401 MSG09, chưa bị khóa
+    for (int i = 1; i <= 4; i++) {
+      postJson("/api/v1/auth/login", loginBody("wrong-pass" + i))
+          .andExpect(status().isUnauthorized())
+          .andExpect(jsonPath("$.errorCode").value("ACCOUNT_INVALID_CREDENTIALS"))
+          .andExpect(jsonPath("$.messageCode").value("MSG09"));
+    }
+
+    UserAccount account = userAccountRepository.findByEmail(email).orElseThrow();
+    assertThat(account.getFailedLoginCount()).isEqualTo((short) 4);
+    assertThat(account.getLoginLockedUntil()).isNull();
+
+    // Lần thứ 5 sai: trả 401 MSG09 nhưng kích hoạt khóa tạm thời
+    postJson("/api/v1/auth/login", loginBody("wrong-pass5"))
+        .andExpect(status().isUnauthorized())
+        .andExpect(jsonPath("$.errorCode").value("ACCOUNT_INVALID_CREDENTIALS"))
+        .andExpect(jsonPath("$.messageCode").value("MSG09"));
+
+    account = userAccountRepository.findByEmail(email).orElseThrow();
+    assertThat(account.getFailedLoginCount()).isEqualTo((short) 5);
+    assertThat(account.getLoginLockedUntil()).isNotNull();
+
+    // Lần thứ 6 với mật khẩu ĐÚNG: bị từ chối 429 MSG10 vì đang trong 15 phút khóa
+    postJson("/api/v1/auth/login", loginBody(PASSWORD))
+        .andExpect(status().isTooManyRequests())
+        .andExpect(jsonPath("$.errorCode").value("ACCOUNT_TEMPORARILY_LOCKED"))
+        .andExpect(jsonPath("$.messageCode").value("MSG10"));
+
+    // Giả lập hết thời gian khóa 15 phút
+    account.setLoginLockedUntil(Instant.now().minusSeconds(1));
+    userAccountRepository.save(account);
+
+    // Đăng nhập lại với mật khẩu đúng: thành công và reset bộ đếm về 0, khóa về null
+    postJson("/api/v1/auth/login", loginBody(PASSWORD))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.accessToken").isNotEmpty())
+        .andExpect(jsonPath("$.refreshToken").isNotEmpty());
+
+    account = userAccountRepository.findByEmail(email).orElseThrow();
+    assertThat(account.getFailedLoginCount()).isEqualTo((short) 0);
+    assertThat(account.getLoginLockedUntil()).isNull();
+  }
+
   @Test
   void invalidRegisterBodyReturnsFieldErrors() throws Exception {
     String body =
@@ -168,6 +223,81 @@ class AuthFlowIntegrationTest {
         .andExpect(jsonPath("$.errors[?(@.field == 'termsAccepted')]").exists());
   }
 
+  @Test
+  void resendOtpFlow_enforcesCooldownRateLimitAndInvalidatesOldOtp() throws Exception {
+    postJson("/api/v1/auth/register", registerBody(email)).andExpect(status().isCreated());
+    String firstOtp = capturedOtp();
+
+    // 1. Gửi lại ngay lập tức (< 60s) → 429 TOO_MANY_REQUESTS (MSG12)
+    postJson("/api/v1/auth/resend-otp", resendBody())
+        .andExpect(status().isTooManyRequests())
+        .andExpect(jsonPath("$.errorCode").value("ACCOUNT_OTP_RESEND_TOO_FAST"))
+        .andExpect(jsonPath("$.messageCode").value("MSG12"));
+
+    // Giả lập đã qua 65 giây kể từ khi đăng ký
+    OtpCode firstCodeEntity = otpCodeRepository.findAll().stream()
+        .filter(c -> c.getUserAccount().getId().equals(accountId()))
+        .findFirst().orElseThrow();
+    jdbcTemplate.update(
+        "UPDATE otp_codes SET created_at = ? WHERE id = ?",
+        java.sql.Timestamp.from(Instant.now().minusSeconds(65)),
+        firstCodeEntity.getId());
+
+    // 2. Gửi lại sau ≥ 60s (lần 1) → 204 No Content thành công
+    postJson("/api/v1/auth/resend-otp", resendBody())
+        .andExpect(status().isNoContent());
+
+    String secondOtp = capturedOtp();
+    assertThat(secondOtp).isNotEqualTo(firstOtp);
+
+    // 3. Thử dùng mã cũ (firstOtp) để xác thực → 422 ACCOUNT_OTP_INVALID (MSG11) vì đã bị vô hiệu
+    postJson("/api/v1/auth/verify-email", verifyBody(firstOtp))
+        .andExpect(status().isUnprocessableContent())
+        .andExpect(jsonPath("$.errorCode").value("ACCOUNT_OTP_INVALID"))
+        .andExpect(jsonPath("$.messageCode").value("MSG11"));
+
+    // Giả lập qua tiếp 65 giây cho mã thứ 2
+    OtpCode secondCodeEntity = otpCodeRepository.findAll().stream()
+        .filter(c -> c.getUserAccount().getId().equals(accountId()))
+        .filter(c -> !c.getId().equals(firstCodeEntity.getId()))
+        .findFirst().orElseThrow();
+    jdbcTemplate.update(
+        "UPDATE otp_codes SET created_at = ? WHERE id = ?",
+        java.sql.Timestamp.from(Instant.now().minusSeconds(65)),
+        secondCodeEntity.getId());
+
+    // 4. Gửi lại sau ≥ 60s (lần 2) → 204 No Content (lúc này tổng cộng 3 mã đã được sinh trong 15 phút)
+    postJson("/api/v1/auth/resend-otp", resendBody())
+        .andExpect(status().isNoContent());
+
+    String thirdOtp = capturedOtp();
+    assertThat(thirdOtp).isNotEqualTo(secondOtp);
+
+    // Giả lập qua tiếp 65 giây cho mã thứ 3 để tránh rule 60 giây
+    OtpCode thirdCodeEntity = otpCodeRepository.findAll().stream()
+        .filter(c -> c.getUserAccount().getId().equals(accountId()))
+        .max(java.util.Comparator.comparing(OtpCode::getId)).orElseThrow();
+    jdbcTemplate.update(
+        "UPDATE otp_codes SET created_at = ? WHERE id = ?",
+        java.sql.Timestamp.from(Instant.now().minusSeconds(65)),
+        thirdCodeEntity.getId());
+
+    // 5. Gửi lại lần tiếp theo trong 15 phút (đã đạt giới hạn 3 mã / 15 phút) → 429 ACCOUNT_OTP_RESEND_LIMIT_EXCEEDED (MSG12)
+    postJson("/api/v1/auth/resend-otp", resendBody())
+        .andExpect(status().isTooManyRequests())
+        .andExpect(jsonPath("$.errorCode").value("ACCOUNT_OTP_RESEND_LIMIT_EXCEEDED"))
+        .andExpect(jsonPath("$.messageCode").value("MSG12"));
+
+    // 6. Mã mới nhất (thirdOtp) vẫn xác thực thành công và kích hoạt tài khoản
+    postJson("/api/v1/auth/verify-email", verifyBody(thirdOtp))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.tokenType").value("Bearer"))
+        .andExpect(jsonPath("$.accessToken").isNotEmpty());
+
+    UserAccount account = userAccountRepository.findByEmail(email).orElseThrow();
+    assertThat(account.getStatus()).isEqualTo(com.fa26se088.filmlink.entity.account.enums.UserAccountStatus.ACTIVE);
+  }
+
   private ResultActions postJson(String path, String body) throws Exception {
     return mockMvc.perform(
         post(path)
@@ -177,10 +307,18 @@ class AuthFlowIntegrationTest {
 
   private String capturedOtp() {
     ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
-    verify(emailClient).send(eq(email), anyString(), bodyCaptor.capture());
-    Matcher matcher = Pattern.compile("\\b(\\d{6})\\b").matcher(bodyCaptor.getValue());
+    verify(emailClient, org.mockito.Mockito.atLeastOnce()).send(eq(email), anyString(), bodyCaptor.capture());
+    java.util.List<String> values = bodyCaptor.getAllValues();
+    String lastBody = values.get(values.size() - 1);
+    Matcher matcher = Pattern.compile("\\b(\\d{6})\\b").matcher(lastBody);
     assertThat(matcher.find()).isTrue();
     return matcher.group(1);
+  }
+
+  private String resendBody() {
+    return """
+        {"email":"%s"}
+        """.formatted(email);
   }
 
   private Long accountId() {

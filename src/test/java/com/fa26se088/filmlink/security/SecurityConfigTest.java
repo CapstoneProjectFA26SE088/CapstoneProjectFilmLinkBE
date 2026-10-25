@@ -65,6 +65,16 @@ class SecurityConfigTest {
         .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
   }
 
+  /** Resend OTP là public: body sai trả 400 từ validation, không phải 401. */
+  @Test
+  void resendOtpIsPublic() throws Exception {
+    mockMvc
+        .perform(
+            post("/api/v1/auth/resend-otp").contentType(MediaType.APPLICATION_JSON).content("{}"))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
+  }
+
   @Test
   void logoutRequiresAuthentication() throws Exception {
     mockMvc

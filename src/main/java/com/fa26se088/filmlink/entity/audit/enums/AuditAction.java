@@ -12,6 +12,12 @@ public enum AuditAction {
   // --- account ---
   ACCOUNT_PASSWORD_CHANGED,
 
+  /**
+   * UC06: job định kỳ xoá hàng loạt tài khoản PENDING_VERIFICATION quá 24 giờ chưa xác thực email.
+   * Actor là System (Scheduler). Target type USER_ACCOUNT, targetId = null (batch).
+   */
+  ACCOUNT_UNVERIFIED_PURGED,
+
   // --- lab ---
   /** UC12: Film Lab Owner bật/tắt nhận đơn; before/after ghi {@code acceptingOrders}. */
   LAB_ACCEPTING_ORDERS_CHANGED
