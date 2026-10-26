@@ -20,6 +20,11 @@
         <java.version>21</java.version>
         <springdoc.version>3.1.1</springdoc.version>
         <jjwt.version>0.13.0</jjwt.version>
+        <jacoco.version>0.8.14</jacoco.version>
+        <checkstyle-plugin.version>3.6.0</checkstyle-plugin.version>
+        <checkstyle.version>13.11.0</checkstyle.version>
+        <!-- JaCoCo prepare-agent ghi agent vào property này; để rỗng thì @{argLine} vẫn hợp lệ khi JaCoCo bị bỏ qua. -->
+        <argLine></argLine>
     </properties>
 
     <dependencies>
@@ -135,8 +140,59 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
                     <!-- Java trên Windows gửi múi giờ Asia/Saigon, PostgreSQL bản mới không còn tên này. -->
-                    <argLine>-Duser.timezone=UTC</argLine>
+                    <!-- @{argLine} giữ agent JaCoCo; đặt cứng giá trị sẽ đè mất agent và report coverage rỗng. -->
+                    <argLine>@{argLine} -Duser.timezone=UTC</argLine>
                 </configuration>
+            </plugin>
+            <!-- Coverage: report HTML/XML ở target/site/jacoco/. Chưa đặt ngưỡng. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- Google Java Style, chế độ báo cáo: in vi phạm nhưng không làm build đỏ (chuyển sang chặn sau Review 2). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-checkstyle-plugin</artifactId>
+                <version>${checkstyle-plugin.version}</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>com.puppycrawl.tools</groupId>
+                        <artifactId>checkstyle</artifactId>
+                        <version>${checkstyle.version}</version>
+                    </dependency>
+                </dependencies>
+                <configuration>
+                    <configLocation>google_checks.xml</configLocation>
+                    <consoleOutput>true</consoleOutput>
+                    <failOnViolation>false</failOnViolation>
+                    <includeTestSourceDirectory>false</includeTestSourceDirectory>
+                    <outputFile>${project.build.directory}/checkstyle-result.xml</outputFile>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>checkstyle-validate</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
