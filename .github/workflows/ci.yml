@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+
+# Mỗi PR / nhánh chỉ một lần chạy; push mới huỷ lần chạy cũ.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Tên này là required status check của ruleset: KHÔNG đổi.
+    name: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      # Test cần PostgreSQL thật (Flyway, trigger PL/pgSQL, partial index, ddl-auto: validate).
+      # Mật khẩu dưới đây chỉ tồn tại trong container dùng một lần của máy ảo CI, không mở ra ngoài
+      # và bị xoá khi job kết thúc, nên không phải secret thật.
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: filmlink
+          POSTGRES_PASSWORD: filmlink_ci
+          POSTGRES_DB: filmlink
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U filmlink -d filmlink"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # JWT_SECRET, STORAGE_SIGNING_SECRET không có giá trị mặc định trong application.yml.
+      # App giải mã Base64 và đòi >= 256 bit; 48 byte ngẫu nhiên = 384 bit, sinh mới mỗi lần chạy.
+      - name: Generate test secrets
+        run: |
+          jwt_secret="$(openssl rand -base64 48 | tr -d '\n')"
+          storage_secret="$(openssl rand -base64 48 | tr -d '\n')"
+          echo "::add-mask::$jwt_secret"
+          echo "::add-mask::$storage_secret"
+          echo "JWT_SECRET=$jwt_secret" >> "$GITHUB_ENV"
+          echo "STORAGE_SIGNING_SECRET=$storage_secret" >> "$GITHUB_ENV"
+
+      # Git lưu mvnw ở mode 100644: thiếu bước này thì ./mvnw báo Permission denied.
+      - name: Make Maven Wrapper executable
+        run: chmod +x mvnw
+
+      - name: Build and test
+        env:
+          DB_URL: jdbc:postgresql://localhost:5432/filmlink
+          DB_USERNAME: filmlink
+          DB_PASSWORD: filmlink_ci
+          DB_SCHEMA: filmlink_ci
+          DB_TEST_SCHEMA: filmlink_test
+          MAIL_PROVIDER: log
+        run: ./mvnw -B -ntp clean verify
+
+      - name: Upload JaCoCo report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload Checkstyle result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkstyle-result
+          path: target/checkstyle-result.xml
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload Surefire reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          retention-days: 7
+          if-no-files-found: warn

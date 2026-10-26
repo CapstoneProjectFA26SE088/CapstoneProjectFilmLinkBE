@@ -76,6 +76,22 @@ Gửi access token bằng header `Authorization: Bearer <accessToken>` (Swagger:
 - Cột thời gian dùng `timestamptz` vì `BaseEntity` dùng `Instant`; dùng `timestamp` thì
   `ddl-auto: validate` sẽ báo lệch kiểu.
 
+### CI (GitHub Actions)
+
+- Workflow: `.github/workflows/ci.yml`, job `build-and-test`. Chạy khi mở/cập nhật PR vào `dev`, `main`
+  và khi push vào `dev`, `main`. Push mới lên cùng PR/nhánh huỷ lần chạy cũ.
+- CI chạy `./mvnw -B -ntp clean verify` trên Ubuntu, JDK 21:
+  - Checkstyle (`google_checks.xml`) ở **chế độ báo cáo**: in vi phạm ra log, không làm build đỏ.
+  - Test với PostgreSQL 18 (service container, schema test `filmlink_test`). `JWT_SECRET`,
+    `STORAGE_SIGNING_SECRET` sinh ngẫu nhiên mỗi lần chạy; không dùng GitHub Secret nào.
+  - JaCoCo xuất report coverage, chưa đặt ngưỡng.
+- Xem log và tải report: tab **Actions** → chọn lần chạy → mục **Artifacts** (`jacoco-report`,
+  `checkstyle-result`, `surefire-reports`; giữ 7 ngày). Mở `index.html` trong `jacoco-report` để xem coverage.
+- PR đỏ: chạy `.\mvnw.cmd clean verify` trên máy, sửa tới khi **BUILD SUCCESS** rồi push lại. Test fail thì
+  xem chi tiết trong `surefire-reports`.
+- **Không sửa `.github/` để làm CI xanh** (ví dụ thêm `-DskipTests`). `.github/`, `pom.xml` và
+  `db/migration/` có CODEOWNERS: mọi thay đổi ở đó cần leader duyệt.
+
 ## 3. Cấu trúc thư mục
 
 ```text
