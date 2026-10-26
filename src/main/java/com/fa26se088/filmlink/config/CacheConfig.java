@@ -25,6 +25,7 @@ public class CacheConfig {
   public static final String CACHE_FILM_FORMATS = "film_formats";
   public static final String CACHE_SERVICE_TYPES = "service_types";
   public static final String CACHE_FILM_STOCKS = "film_stocks";
+  public static final String CACHE_SYSTEM_PARAMETERS = "system_parameters";
 
   public static final Duration MASTERDATA_TTL = Duration.ofHours(24);
 

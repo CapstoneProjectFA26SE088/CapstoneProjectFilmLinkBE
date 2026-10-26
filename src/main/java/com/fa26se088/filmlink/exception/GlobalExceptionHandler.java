@@ -49,6 +49,15 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     return toProblem(ErrorCode.ACCESS_DENIED, "Bạn không có quyền thực hiện thao tác này.");
   }
 
+  /** Xung đột ghi đè đồng thời (Optimistic Locking). */
+  @ExceptionHandler(org.springframework.dao.OptimisticLockingFailureException.class)
+  public ProblemDetail handleOptimisticLockingFailureException(
+      org.springframework.dao.OptimisticLockingFailureException ex) {
+    return toProblem(
+        ErrorCode.SYSTEM_PARAMETER_CONFLICT,
+        "Dữ liệu đã bị thay đổi bởi người dùng khác. Vui lòng tải lại trang và thử lại.");
+  }
+
   @ExceptionHandler(Exception.class)
   public ProblemDetail handleUnexpectedException(Exception ex) {
     log.error("Unhandled exception", ex);

@@ -66,4 +66,22 @@ public class MasterdataMapper {
         processName,
         stock.getStatus());
   }
+
+  public com.fa26se088.filmlink.dto.masterdata.response.SystemParameterResponse toResponse(
+      com.fa26se088.filmlink.entity.masterdata.SystemParameter param) {
+    if (param == null) {
+      return null;
+    }
+    Long updatedByAccountId =
+        param.getUpdatedBy() != null ? param.getUpdatedBy().getId() : null;
+    return new com.fa26se088.filmlink.dto.masterdata.response.SystemParameterResponse(
+        param.getId(),
+        param.getKey(),
+        param.getValue(),
+        param.getValueType(),
+        param.getDescription(),
+        param.getVersion(),
+        updatedByAccountId,
+        param.getUpdatedAt());
+  }
 }
