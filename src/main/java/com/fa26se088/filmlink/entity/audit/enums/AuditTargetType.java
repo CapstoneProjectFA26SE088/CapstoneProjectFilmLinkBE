@@ -9,5 +9,14 @@ package com.fa26se088.filmlink.entity.audit.enums;
  */
 public enum AuditTargetType {
   // --- account ---
-  USER_ACCOUNT
+  USER_ACCOUNT,
+
+  // --- masterdata (MD-02) ---
+  FILM_PROCESS,
+  FILM_FORMAT,
+  SERVICE_TYPE,
+  FILM_STOCK,
+
+  // --- lab ---
+  FILM_LAB
 }

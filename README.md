@@ -76,6 +76,22 @@ Gửi access token bằng header `Authorization: Bearer <accessToken>` (Swagger:
 - Cột thời gian dùng `timestamptz` vì `BaseEntity` dùng `Instant`; dùng `timestamp` thì
   `ddl-auto: validate` sẽ báo lệch kiểu.
 
+### CI (GitHub Actions)
+
+- Workflow: `.github/workflows/ci.yml`, job `build-and-test`. Chạy khi mở/cập nhật PR vào `dev`, `main`
+  và khi push vào `dev`, `main`. Push mới lên cùng PR/nhánh huỷ lần chạy cũ.
+- CI chạy `./mvnw -B -ntp clean verify` trên Ubuntu, JDK 21:
+  - Checkstyle (`google_checks.xml`) ở **chế độ báo cáo**: in vi phạm ra log, không làm build đỏ.
+  - Test với PostgreSQL 18 (service container, schema test `filmlink_test`). `JWT_SECRET`,
+    `STORAGE_SIGNING_SECRET` sinh ngẫu nhiên mỗi lần chạy; không dùng GitHub Secret nào.
+  - JaCoCo xuất report coverage, chưa đặt ngưỡng.
+- Xem log và tải report: tab **Actions** → chọn lần chạy → mục **Artifacts** (`jacoco-report`,
+  `checkstyle-result`, `surefire-reports`; giữ 7 ngày). Mở `index.html` trong `jacoco-report` để xem coverage.
+- PR đỏ: chạy `.\mvnw.cmd clean verify` trên máy, sửa tới khi **BUILD SUCCESS** rồi push lại. Test fail thì
+  xem chi tiết trong `surefire-reports`.
+- **Không sửa `.github/` để làm CI xanh** (ví dụ thêm `-DskipTests`). `.github/`, `pom.xml` và
+  `db/migration/` có CODEOWNERS: mọi thay đổi ở đó cần leader duyệt.
+
 ## 3. Cấu trúc thư mục
 
 ```text
@@ -235,6 +251,16 @@ Code Java theo Google Java Style (indent 2 space, không import `*`). Entity k�
 - DB chỉ lưu blobKey (`blob_key`, `avatar_blob_key`), không lưu URL hay đường dẫn. Trả link cho client bằng
   `signedUrl(blobKey)` lúc tạo response (link hết hạn sau 15 phút, không lưu lại).
 - Không có endpoint upload chung: mỗi domain tự mở endpoint multipart của mình (avatar, giấy tờ lab…) và gọi `StorageClient`.
+
+**Hồ sơ lab (LAB-01)**
+
+- Lab được tạo khi duyệt đơn đăng ký: REG-02 publish `service/account/event/LabRegistrationApprovedEvent`
+  **bên trong** transaction duyệt đơn, sau khi tạo tài khoản FILM_LAB_OWNER. Listener ở `FilmLabServiceImpl`
+  chạy đồng bộ với `propagation = MANDATORY`: tạo lab lỗi thì duyệt đơn rollback; publish ngoài transaction
+  thì lỗi `IllegalTransactionStateException`.
+- BR-57 (đủ máy mới được bật nhận đơn): `service/lab/MachineReadiness` là interface của domain `lab`;
+  `SqlMachineReadiness` là bản **tạm** đếm thẳng bảng `machines`. MCH-01 cài bản thật trong
+  `service/machine/impl` rồi **xoá** `SqlMachineReadiness` (để lại 2 bean cùng kiểu thì app không khởi động).
 
 ## 8. Quy ước git
 

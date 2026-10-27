@@ -39,6 +39,8 @@ effective-pom
 # Ignore mọi file .env chứa secret thật
 .env
 .env.local
+.env.*
+!.env.example
 env/
 # Chỉ cho phép commit file template (không có secret thật)
 !.env.example
