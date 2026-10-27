@@ -1,11 +1,15 @@
 package com.fa26se088.filmlink.controller.account;
 
+import com.fa26se088.filmlink.dto.account.request.ForgotPasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.LoginRequest;
 import com.fa26se088.filmlink.dto.account.request.LogoutRequest;
 import com.fa26se088.filmlink.dto.account.request.RefreshTokenRequest;
 import com.fa26se088.filmlink.dto.account.request.RegisterRequest;
 import com.fa26se088.filmlink.dto.account.request.ResendOtpRequest;
+import com.fa26se088.filmlink.dto.account.request.ResetPasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.VerifyEmailRequest;
+import com.fa26se088.filmlink.dto.account.request.VerifyPasswordResetOtpRequest;
+import com.fa26se088.filmlink.dto.account.response.PasswordResetTokenResponse;
 import com.fa26se088.filmlink.dto.account.response.TokenResponse;
 import com.fa26se088.filmlink.dto.account.response.UserAccountResponse;
 import com.fa26se088.filmlink.security.AuthenticatedAccount;
@@ -58,6 +62,36 @@ public class AuthController {
           "Gửi lại sau ≥ 60 giây, tối đa 3 lần / 15 phút. Mã cũ bị vô hiệu hoá. Lỗi: MSG12.")
   public void resendOtp(@Valid @RequestBody ResendOtpRequest request) {
     userAccountService.resendOtp(request);
+  }
+
+  @PostMapping("/forgot-password")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  @Operation(
+      summary = "Yêu cầu mã OTP đặt lại mật khẩu (SCR-03, UC02)",
+      description =
+          "Gửi mã OTP 6 số qua email. Dù email có tồn tại hay không đều trả 204 để chống dò email.")
+  public void forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+    userAccountService.forgotPassword(request);
+  }
+
+  @PostMapping("/verify-password-reset-otp")
+  @Operation(
+      summary = "Xác thực OTP đặt lại mật khẩu (SCR-03, UC02)",
+      description =
+          "Xác thực mã OTP 6 số và trả về reset token ngắn hạn (15 phút). Sai hoặc hết hạn: MSG11.")
+  public PasswordResetTokenResponse verifyPasswordResetOtp(
+      @Valid @RequestBody VerifyPasswordResetOtpRequest request) {
+    return userAccountService.verifyPasswordResetOtp(request);
+  }
+
+  @PostMapping("/reset-password")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  @Operation(
+      summary = "Đặt mật khẩu mới (SCR-03, UC02)",
+      description =
+          "Đặt mật khẩu mới bằng reset token. Thu hồi mọi refresh token cũ và gửi email cảnh báo.")
+  public void resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+    userAccountService.resetPassword(request);
   }
 
   @PostMapping("/login")

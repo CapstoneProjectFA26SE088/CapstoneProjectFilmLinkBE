@@ -2,10 +2,14 @@ package com.fa26se088.filmlink.service.account.impl;
 
 import com.fa26se088.filmlink.client.notification.EmailClient;
 import com.fa26se088.filmlink.dto.account.request.ChangePasswordRequest;
+import com.fa26se088.filmlink.dto.account.request.ForgotPasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.RegisterRequest;
 import com.fa26se088.filmlink.dto.account.request.ResendOtpRequest;
+import com.fa26se088.filmlink.dto.account.request.ResetPasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.VerifyEmailRequest;
+import com.fa26se088.filmlink.dto.account.request.VerifyPasswordResetOtpRequest;
 import com.fa26se088.filmlink.dto.account.response.AccountNotificationPreferenceResponse;
+import com.fa26se088.filmlink.dto.account.response.PasswordResetTokenResponse;
 import com.fa26se088.filmlink.dto.account.response.TokenResponse;
 import com.fa26se088.filmlink.dto.account.response.UserAccountResponse;
 import com.fa26se088.filmlink.dto.audit.request.AuditEntry;
@@ -21,11 +25,13 @@ import com.fa26se088.filmlink.exception.ErrorCode;
 import com.fa26se088.filmlink.mapper.account.UserAccountMapper;
 import com.fa26se088.filmlink.repository.account.OtpCodeRepository;
 import com.fa26se088.filmlink.repository.account.UserAccountRepository;
+import com.fa26se088.filmlink.security.JwtTokenProvider;
 import com.fa26se088.filmlink.service.account.AuthenticationService;
 import com.fa26se088.filmlink.service.account.UserAccountService;
 import com.fa26se088.filmlink.service.account.event.UserAccountPasswordChangedEvent;
 import com.fa26se088.filmlink.service.audit.AuditLogService;
 import com.fa26se088.filmlink.utils.EmailUtils;
+import io.jsonwebtoken.JwtException;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
@@ -72,6 +78,7 @@ public class UserAccountServiceImpl implements UserAccountService {
   private final UserAccountMapper userAccountMapper;
   private final AuditLogService auditLogService;
   private final ApplicationEventPublisher eventPublisher;
+  private final JwtTokenProvider jwtTokenProvider;
 
   /**
    * BR-01: tài khoản tự đăng ký luôn có role PHOTOGRAPHER, không nhận role từ request.
@@ -315,6 +322,190 @@ public class UserAccountServiceImpl implements UserAccountService {
             AuditTargetType.USER_ACCOUNT,
             accountId,
             "Người dùng tự đổi mật khẩu",
+            null,
+            null));
+  }
+
+  /**
+   * SCR-03 bước 1: yêu cầu gửi mã OTP đặt lại mật khẩu qua email.
+   *
+   * <ul>
+   *   <li>Chuẩn hoá email (trim + chữ thường).
+   *   <li>Tìm tài khoản: nếu không tồn tại hoặc không ACTIVE, kết thúc thành công bình thường (không
+   *       ném exception) để tránh lộ email (enumeration attack).
+   *   <li>Kiểm tra quy tắc 60 giây (UH-36): khoảng cách với lần tạo mã gần nhất phải ≥ 60 giây.
+   *   <li>Kiểm tra quy tắc 15 phút (UH-36): trong 15 phút gần nhất không quá 3 lần tạo mã.
+   *   <li>Vô hiệu hoá toàn bộ mã OTP mục đích PASSWORD_RESET cũ chưa sử dụng.
+   *   <li>Sinh mã OTP 6 số mới, băm BCrypt, lưu DB và gửi qua EmailClient (ngoại lệ trừ OTP).
+   * </ul>
+   */
+  @Override
+  @Transactional
+  public void forgotPassword(ForgotPasswordRequest request) {
+    Instant now = Instant.now();
+    String email = EmailUtils.normalize(request.email());
+
+    // 1. Tìm tài khoản. Nếu không tồn tại hoặc không ACTIVE: trả về bình thường, không tiết lộ sự tồn tại của email
+    Optional<UserAccount> accountOpt = userAccountRepository.findByEmailForUpdate(email);
+    if (accountOpt.isEmpty() || accountOpt.get().getStatus() != UserAccountStatus.ACTIVE) {
+      log.info(
+          "[ForgotPassword] Yêu cầu đặt lại mật khẩu cho email không tồn tại hoặc tài khoản không active.");
+      return;
+    }
+
+    UserAccount account = accountOpt.get();
+
+    // 2. Quy tắc 60 giây (UH-36): khoảng cách với lần tạo mã PASSWORD_RESET gần nhất phải ≥ 60 giây
+    Optional<OtpCode> latestOtp =
+        otpCodeRepository.findFirstByUserAccountIdAndPurposeOrderByCreatedAtDesc(
+            account.getId(), OtpPurpose.PASSWORD_RESET);
+    if (latestOtp.isPresent() && latestOtp.get().getCreatedAt() != null) {
+      long secondsSinceLast = Duration.between(latestOtp.get().getCreatedAt(), now).getSeconds();
+      if (secondsSinceLast < OTP_RESEND_COOLDOWN_SECONDS) {
+        throw new BusinessException(
+            ErrorCode.ACCOUNT_OTP_RESEND_TOO_FAST,
+            "Vui lòng đợi ít nhất "
+                + (OTP_RESEND_COOLDOWN_SECONDS - secondsSinceLast)
+                + " giây trước khi yêu cầu gửi lại mã OTP.");
+      }
+    }
+
+    // 3. Quy tắc tối đa 3 lần / 15 phút (UH-36)
+    Instant windowStart = now.minus(OTP_RESEND_WINDOW);
+    long countInWindow =
+        otpCodeRepository.countByUserAccountIdAndPurposeAndCreatedAtAfter(
+            account.getId(), OtpPurpose.PASSWORD_RESET, windowStart);
+    if (countInWindow >= OTP_MAX_PER_WINDOW) {
+      throw new BusinessException(
+          ErrorCode.ACCOUNT_OTP_RESEND_LIMIT_EXCEEDED,
+          "Bạn đã vượt quá số lần yêu cầu gửi mã OTP (tối đa "
+              + OTP_MAX_PER_WINDOW
+              + " lần trong "
+              + OTP_RESEND_WINDOW.toMinutes()
+              + " phút). Vui lòng thử lại sau.");
+    }
+
+    // 4. Vô hiệu hoá mọi mã OTP đặt lại mật khẩu cũ chưa tiêu thụ
+    otpCodeRepository.invalidateAllUnconsumed(account.getId(), OtpPurpose.PASSWORD_RESET, now);
+
+    // 5. Sinh mã OTP 6 số mới, lưu hash BCrypt và gửi qua EmailClient (ngoại lệ trừ OTP)
+    String code = String.format("%06d", SECURE_RANDOM.nextInt(OTP_BOUND));
+    OtpCode otpCode = new OtpCode();
+    otpCode.setUserAccount(account);
+    otpCode.setPurpose(OtpPurpose.PASSWORD_RESET);
+    otpCode.setCodeHash(passwordEncoder.encode(code));
+    otpCode.setExpiresAt(now.plus(OTP_TTL));
+    otpCodeRepository.save(otpCode);
+
+    emailClient.send(
+        account.getEmail(),
+        "FilmLink - Đặt lại mật khẩu",
+        "Mã xác nhận đặt lại mật khẩu của bạn là "
+            + code
+            + ". Mã có hiệu lực trong "
+            + OTP_TTL.toMinutes()
+            + " phút. Nếu bạn không yêu cầu đặt lại mật khẩu, vui lòng bỏ qua email này.");
+  }
+
+  /**
+   * SCR-03 bước 2: xác thực mã OTP đặt lại mật khẩu.
+   *
+   * <ul>
+   *   <li>Tìm tài khoản ACTIVE; nếu không có ném ACCOUNT_OTP_INVALID chung để không lộ thông tin.
+   *   <li>Tìm mã OTP PASSWORD_RESET gần nhất còn hiệu lực.
+   *   <li>So khớp hash BCrypt: sai thì tăng failed_attempts và ném ACCOUNT_OTP_INVALID.
+   *   <li>Đúng thì đánh dấu consumed và cấp reset token JWT ngắn hạn (15 phút).
+   * </ul>
+   */
+  @Override
+  @Transactional(noRollbackFor = BusinessException.class)
+  public PasswordResetTokenResponse verifyPasswordResetOtp(VerifyPasswordResetOtpRequest request) {
+    Instant now = Instant.now();
+    String email = EmailUtils.normalize(request.email());
+
+    UserAccount account =
+        userAccountRepository
+            .findByEmail(email)
+            .filter(found -> found.getStatus() == UserAccountStatus.ACTIVE)
+            .orElseThrow(UserAccountServiceImpl::otpInvalid);
+
+    OtpCode otpCode =
+        otpCodeRepository
+            .findFirstByUserAccountIdAndPurposeOrderByCreatedAtDesc(
+                account.getId(), OtpPurpose.PASSWORD_RESET)
+            .filter(code -> code.isUsableAt(now))
+            .orElseThrow(UserAccountServiceImpl::otpInvalid);
+
+    if (!passwordEncoder.matches(request.otp(), otpCode.getCodeHash())) {
+      otpCode.setFailedAttempts((short) (otpCode.getFailedAttempts() + 1));
+      throw otpInvalid();
+    }
+
+    otpCode.setConsumedAt(now);
+    String resetToken =
+        jwtTokenProvider.generatePasswordResetToken(account.getId(), account.getEmail());
+    return new PasswordResetTokenResponse(resetToken);
+  }
+
+  /**
+   * SCR-03 bước 3: đặt mật khẩu mới bằng reset token.
+   *
+   * <ul>
+   *   <li>Giải mã và xác thực reset token. Sai/hết hạn ném ACCOUNT_INVALID_TOKEN.
+   *   <li>Tìm tài khoản ACTIVE tương ứng.
+   *   <li>Kiểm tra mật khẩu mới khác mật khẩu cũ: trùng ném ACCOUNT_NEW_PASSWORD_SAME_AS_OLD.
+   *   <li>Lưu mật khẩu mới băm BCrypt.
+   *   <li>Reset failed_login_count về 0 và huỷ login_locked_until nếu có.
+   *   <li>Thu hồi toàn bộ refresh token cũ của tài khoản qua AuthenticationService.
+   *   <li>Phát sự kiện UserAccountPasswordChangedEvent để domain notification gửi email cảnh báo bảo mật.
+   *   <li>Ghi audit log SUCCESS (ACCOUNT_PASSWORD_RESET).
+   * </ul>
+   */
+  @Override
+  @Transactional
+  public void resetPassword(ResetPasswordRequest request) {
+    Long accountId;
+    try {
+      accountId = jwtTokenProvider.parsePasswordResetToken(request.resetToken());
+    } catch (JwtException | IllegalArgumentException ex) {
+      throw new BusinessException(
+          ErrorCode.ACCOUNT_INVALID_TOKEN, "Token đặt lại mật khẩu không hợp lệ hoặc đã hết hạn.");
+    }
+
+    UserAccount account =
+        userAccountRepository
+            .findById(accountId)
+            .filter(found -> found.getStatus() == UserAccountStatus.ACTIVE)
+            .orElseThrow(
+                () ->
+                    new BusinessException(
+                        ErrorCode.RESOURCE_NOT_FOUND, "Không tìm thấy tài khoản."));
+
+    if (passwordEncoder.matches(request.newPassword(), account.getPasswordHash())) {
+      throw new BusinessException(
+          ErrorCode.ACCOUNT_NEW_PASSWORD_SAME_AS_OLD, "Mật khẩu mới phải khác mật khẩu hiện tại.");
+    }
+
+    account.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+    account.setFailedLoginCount((short) 0);
+    account.setLoginLockedUntil(null);
+    userAccountRepository.saveAndFlush(account);
+
+    // Thu hồi toàn bộ refresh token cũ của tài khoản (đăng xuất mọi phiên)
+    authenticationService.revokeAllTokens(accountId);
+
+    // Phát sự kiện để domain notification gửi email cảnh báo bảo mật sau khi commit transaction
+    eventPublisher.publishEvent(
+        new UserAccountPasswordChangedEvent(
+            account.getId(), account.getEmail(), account.getFullName()));
+
+    // Ghi audit log
+    auditLogService.recordSuccess(
+        new AuditEntry(
+            AuditAction.ACCOUNT_PASSWORD_RESET,
+            AuditTargetType.USER_ACCOUNT,
+            accountId,
+            "Người dùng đặt lại mật khẩu thành công qua luồng quên mật khẩu (SCR-03)",
             null,
             null));
   }

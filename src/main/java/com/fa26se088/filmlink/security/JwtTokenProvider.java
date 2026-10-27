@@ -64,4 +64,45 @@ public class JwtTokenProvider {
   public Duration getAccessTokenTtl() {
     return accessTokenTtl;
   }
+
+  private static final String CLAIM_PURPOSE = "purpose";
+  private static final String PURPOSE_PASSWORD_RESET = "PASSWORD_RESET";
+  private static final Duration PASSWORD_RESET_TOKEN_TTL = Duration.ofMinutes(15);
+
+  /**
+   * SCR-03: sinh token đặt lại mật khẩu ngắn hạn (15 phút) sau khi xác thực OTP thành công.
+   * Token chứa claim {@code purpose = PASSWORD_RESET}.
+   *
+   * @param accountId ID tài khoản
+   * @param email email của tài khoản
+   * @return chuỗi token JWT ký HS256
+   */
+  public String generatePasswordResetToken(Long accountId, String email) {
+    Instant now = Instant.now();
+    return Jwts.builder()
+        .subject(String.valueOf(accountId))
+        .claim(CLAIM_EMAIL, email)
+        .claim(CLAIM_PURPOSE, PURPOSE_PASSWORD_RESET)
+        .issuedAt(Date.from(now))
+        .expiration(Date.from(now.plus(PASSWORD_RESET_TOKEN_TTL)))
+        .signWith(signingKey, Jwts.SIG.HS256)
+        .compact();
+  }
+
+  /**
+   * SCR-03: xác thực chữ ký, thời hạn và mục đích của password reset token.
+   *
+   * @param token chuỗi token đặt lại mật khẩu
+   * @return accountId của tài khoản
+   * @throws JwtException nếu token sai chữ ký, hết hạn hoặc sai mục đích
+   */
+  public Long parsePasswordResetToken(String token) {
+    Claims claims =
+        Jwts.parser().verifyWith(signingKey).build().parseSignedClaims(token).getPayload();
+    String purpose = claims.get(CLAIM_PURPOSE, String.class);
+    if (!PURPOSE_PASSWORD_RESET.equals(purpose)) {
+      throw new JwtException("Token không đúng mục đích đặt lại mật khẩu");
+    }
+    return Long.valueOf(claims.getSubject());
+  }
 }

@@ -32,13 +32,16 @@ import org.springframework.web.servlet.HandlerExceptionResolver;
 @EnableMethodSecurity
 public class SecurityConfig {
 
-  /** UC06, UC01: các bước trước khi có access token. */
+  /** UC06, UC01, SCR-03: các bước trước khi có access token. */
   private static final String[] PUBLIC_POST_PATHS = {
     "/api/v1/auth/register",
     "/api/v1/auth/verify-email",
     "/api/v1/auth/resend-otp",
     "/api/v1/auth/login",
-    "/api/v1/auth/refresh"
+    "/api/v1/auth/refresh",
+    "/api/v1/auth/forgot-password",
+    "/api/v1/auth/verify-password-reset-otp",
+    "/api/v1/auth/reset-password"
   };
 
   /**

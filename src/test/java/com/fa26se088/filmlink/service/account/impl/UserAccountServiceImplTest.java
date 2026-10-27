@@ -12,9 +12,14 @@ import static org.mockito.Mockito.when;
 
 import com.fa26se088.filmlink.client.notification.EmailClient;
 import com.fa26se088.filmlink.dto.account.request.ChangePasswordRequest;
+import com.fa26se088.filmlink.dto.account.request.ForgotPasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.RegisterRequest;
 import com.fa26se088.filmlink.dto.account.request.ResendOtpRequest;
+import com.fa26se088.filmlink.dto.account.request.ResetPasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.VerifyEmailRequest;
+import com.fa26se088.filmlink.dto.account.request.VerifyPasswordResetOtpRequest;
+import com.fa26se088.filmlink.dto.account.response.AccountNotificationPreferenceResponse;
+import com.fa26se088.filmlink.dto.account.response.PasswordResetTokenResponse;
 import com.fa26se088.filmlink.dto.account.response.TokenResponse;
 import com.fa26se088.filmlink.dto.account.response.UserAccountResponse;
 import com.fa26se088.filmlink.dto.audit.request.AuditEntry;
@@ -30,9 +35,11 @@ import com.fa26se088.filmlink.exception.ErrorCode;
 import com.fa26se088.filmlink.mapper.account.UserAccountMapper;
 import com.fa26se088.filmlink.repository.account.OtpCodeRepository;
 import com.fa26se088.filmlink.repository.account.UserAccountRepository;
+import com.fa26se088.filmlink.security.JwtTokenProvider;
 import com.fa26se088.filmlink.service.account.AuthenticationService;
 import com.fa26se088.filmlink.service.account.event.UserAccountPasswordChangedEvent;
 import com.fa26se088.filmlink.service.audit.AuditLogService;
+import io.jsonwebtoken.JwtException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -62,6 +69,7 @@ class UserAccountServiceImplTest {
   @Mock private AuthenticationService authenticationService;
   @Mock private AuditLogService auditLogService;
   @Mock private ApplicationEventPublisher eventPublisher;
+  @Mock private JwtTokenProvider jwtTokenProvider;
 
   /** BCrypt thật (strength thấp cho nhanh) để kiểm hash OTP đúng như khi chạy thật. */
   private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder(4);
@@ -79,7 +87,8 @@ class UserAccountServiceImplTest {
             authenticationService,
             new UserAccountMapper(),
             auditLogService,
-            eventPublisher);
+            eventPublisher,
+            jwtTokenProvider);
   }
 
   // --- register (UC06, BR-01) ---
@@ -589,6 +598,211 @@ class UserAccountServiceImplTest {
         .deleteByStatusAndCreatedAtBefore(eq(UserAccountStatus.PENDING_VERIFICATION), any());
     verify(userAccountRepository, never())
         .deleteByStatusAndCreatedAtBefore(eq(UserAccountStatus.ACTIVE), any());
+  }
+
+  // --- SCR-03: Forgot Password Flow (SCR-03, UC02) ---
+
+  @Test
+  void forgotPassword_existingActiveUser_generatesOtpAndSendsEmail() {
+    UserAccount account = activeAccount("password123");
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
+    when(otpCodeRepository.findFirstByUserAccountIdAndPurposeOrderByCreatedAtDesc(
+            account.getId(), OtpPurpose.PASSWORD_RESET))
+        .thenReturn(Optional.empty());
+    when(otpCodeRepository.countByUserAccountIdAndPurposeAndCreatedAtAfter(
+            eq(account.getId()), eq(OtpPurpose.PASSWORD_RESET), any()))
+        .thenReturn(0L);
+
+    service.forgotPassword(new ForgotPasswordRequest(EMAIL));
+
+    ArgumentCaptor<OtpCode> otpCaptor = ArgumentCaptor.forClass(OtpCode.class);
+    verify(otpCodeRepository).save(otpCaptor.capture());
+    OtpCode saved = otpCaptor.getValue();
+    assertThat(saved.getPurpose()).isEqualTo(OtpPurpose.PASSWORD_RESET);
+    assertThat(saved.getUserAccount()).isEqualTo(account);
+    assertThat(saved.getExpiresAt()).isNotNull();
+
+    // Verify gửi OTP qua EmailClient (ngoại lệ trừ OTP)
+    verify(emailClient).send(eq(EMAIL), eq("FilmLink - Đặt lại mật khẩu"), anyString());
+  }
+
+  @Test
+  void forgotPassword_nonExistingUser_doesNothingAndSucceeds() {
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.empty());
+
+    // Không ném lỗi, không tiết lộ email có tồn tại
+    service.forgotPassword(new ForgotPasswordRequest(EMAIL));
+
+    verify(otpCodeRepository, never()).save(any());
+    verify(emailClient, never()).send(anyString(), anyString(), anyString());
+  }
+
+  @Test
+  void forgotPassword_inactiveUser_doesNothingAndSucceeds() {
+    UserAccount account = pendingAccount();
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
+
+    // Không ném lỗi
+    service.forgotPassword(new ForgotPasswordRequest(EMAIL));
+
+    verify(otpCodeRepository, never()).save(any());
+    verify(emailClient, never()).send(anyString(), anyString(), anyString());
+  }
+
+  @Test
+  void forgotPassword_resendTooFast_throws() {
+    UserAccount account = activeAccount("password123");
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
+
+    OtpCode recentOtp = new OtpCode();
+    // BaseEntity.createdAt được Spring Data JPA quản lý, không có setter → dùng reflection
+    ReflectionTestUtils.setField(recentOtp, "createdAt", Instant.now().minusSeconds(30));
+    when(otpCodeRepository.findFirstByUserAccountIdAndPurposeOrderByCreatedAtDesc(
+            account.getId(), OtpPurpose.PASSWORD_RESET))
+        .thenReturn(Optional.of(recentOtp));
+
+    assertThatThrownBy(() -> service.forgotPassword(new ForgotPasswordRequest(EMAIL)))
+        .isInstanceOf(BusinessException.class)
+        .extracting(ex -> ((BusinessException) ex).getErrorCode())
+        .isEqualTo(ErrorCode.ACCOUNT_OTP_RESEND_TOO_FAST);
+
+    verify(emailClient, never()).send(anyString(), anyString(), anyString());
+  }
+
+  @Test
+  void forgotPassword_exceedWindowLimit_throws() {
+    UserAccount account = activeAccount("password123");
+    when(userAccountRepository.findByEmailForUpdate(EMAIL)).thenReturn(Optional.of(account));
+    when(otpCodeRepository.findFirstByUserAccountIdAndPurposeOrderByCreatedAtDesc(
+            account.getId(), OtpPurpose.PASSWORD_RESET))
+        .thenReturn(Optional.empty());
+    when(otpCodeRepository.countByUserAccountIdAndPurposeAndCreatedAtAfter(
+            eq(account.getId()), eq(OtpPurpose.PASSWORD_RESET), any()))
+        .thenReturn(3L); // đã gửi 3 lần trong 15 phút
+
+    assertThatThrownBy(() -> service.forgotPassword(new ForgotPasswordRequest(EMAIL)))
+        .isInstanceOf(BusinessException.class)
+        .extracting(ex -> ((BusinessException) ex).getErrorCode())
+        .isEqualTo(ErrorCode.ACCOUNT_OTP_RESEND_LIMIT_EXCEEDED);
+
+    verify(emailClient, never()).send(anyString(), anyString(), anyString());
+  }
+
+  @Test
+  void verifyPasswordResetOtp_validOtp_consumesOtpAndReturnsResetToken() {
+    UserAccount account = activeAccount("password123");
+    when(userAccountRepository.findByEmail(EMAIL)).thenReturn(Optional.of(account));
+
+    OtpCode validOtp = new OtpCode();
+    validOtp.setUserAccount(account);
+    validOtp.setPurpose(OtpPurpose.PASSWORD_RESET);
+    validOtp.setCodeHash(passwordEncoder.encode(OTP));
+    validOtp.setExpiresAt(Instant.now().plusSeconds(300));
+    validOtp.setFailedAttempts((short) 0);
+
+    when(otpCodeRepository.findFirstByUserAccountIdAndPurposeOrderByCreatedAtDesc(
+            account.getId(), OtpPurpose.PASSWORD_RESET))
+        .thenReturn(Optional.of(validOtp));
+
+    when(jwtTokenProvider.generatePasswordResetToken(account.getId(), EMAIL))
+        .thenReturn("mock-reset-token-xyz");
+
+    PasswordResetTokenResponse response =
+        service.verifyPasswordResetOtp(new VerifyPasswordResetOtpRequest(EMAIL, OTP));
+
+    assertThat(response.resetToken()).isEqualTo("mock-reset-token-xyz");
+    assertThat(validOtp.getConsumedAt()).isNotNull();
+  }
+
+  @Test
+  void verifyPasswordResetOtp_invalidOtp_incrementsFailedAttemptsAndThrows() {
+    UserAccount account = activeAccount("password123");
+    when(userAccountRepository.findByEmail(EMAIL)).thenReturn(Optional.of(account));
+
+    OtpCode validOtp = new OtpCode();
+    validOtp.setUserAccount(account);
+    validOtp.setPurpose(OtpPurpose.PASSWORD_RESET);
+    validOtp.setCodeHash(passwordEncoder.encode("999999")); // hash của mã khác
+    validOtp.setExpiresAt(Instant.now().plusSeconds(300));
+    validOtp.setFailedAttempts((short) 0);
+
+    when(otpCodeRepository.findFirstByUserAccountIdAndPurposeOrderByCreatedAtDesc(
+            account.getId(), OtpPurpose.PASSWORD_RESET))
+        .thenReturn(Optional.of(validOtp));
+
+    assertThatThrownBy(
+            () -> service.verifyPasswordResetOtp(new VerifyPasswordResetOtpRequest(EMAIL, OTP)))
+        .isInstanceOf(BusinessException.class)
+        .extracting(ex -> ((BusinessException) ex).getErrorCode())
+        .isEqualTo(ErrorCode.ACCOUNT_OTP_INVALID);
+
+    assertThat(validOtp.getFailedAttempts()).isEqualTo((short) 1);
+    assertThat(validOtp.getConsumedAt()).isNull();
+  }
+
+  @Test
+  void verifyPasswordResetOtp_nonExistingOrInactiveUser_throwsAccountOtpInvalid() {
+    when(userAccountRepository.findByEmail(EMAIL)).thenReturn(Optional.empty());
+
+    assertThatThrownBy(
+            () -> service.verifyPasswordResetOtp(new VerifyPasswordResetOtpRequest(EMAIL, OTP)))
+        .isInstanceOf(BusinessException.class)
+        .extracting(ex -> ((BusinessException) ex).getErrorCode())
+        .isEqualTo(ErrorCode.ACCOUNT_OTP_INVALID);
+  }
+
+  @Test
+  void resetPassword_validToken_updatesPasswordRevokesTokensPublishesEventAndRecordsAudit() {
+    UserAccount account = activeAccount("oldPassword123");
+    when(jwtTokenProvider.parsePasswordResetToken("valid-token")).thenReturn(1L);
+    when(userAccountRepository.findById(1L)).thenReturn(Optional.of(account));
+
+    service.resetPassword(new ResetPasswordRequest("valid-token", "newPassword456"));
+
+    assertThat(passwordEncoder.matches("newPassword456", account.getPasswordHash())).isTrue();
+    verify(userAccountRepository).saveAndFlush(account);
+
+    // Thu hồi refresh token cũ
+    verify(authenticationService).revokeAllTokens(1L);
+
+    // Phát sự kiện cảnh báo bảo mật
+    verify(eventPublisher)
+        .publishEvent(
+            eq(new UserAccountPasswordChangedEvent(1L, EMAIL, account.getFullName())));
+
+    // Ghi audit log ACCOUNT_PASSWORD_RESET
+    verify(auditLogService)
+        .recordSuccess(
+            argThat(
+                entry ->
+                    entry.action() == AuditAction.ACCOUNT_PASSWORD_RESET
+                        && entry.targetType() == AuditTargetType.USER_ACCOUNT
+                        && entry.targetId().equals(1L)));
+  }
+
+  @Test
+  void resetPassword_sameAsOldPassword_throws() {
+    UserAccount account = activeAccount("currentSecret123");
+    when(jwtTokenProvider.parsePasswordResetToken("valid-token")).thenReturn(1L);
+    when(userAccountRepository.findById(1L)).thenReturn(Optional.of(account));
+
+    assertThatThrownBy(
+            () -> service.resetPassword(new ResetPasswordRequest("valid-token", "currentSecret123")))
+        .isInstanceOf(BusinessException.class)
+        .extracting(ex -> ((BusinessException) ex).getErrorCode())
+        .isEqualTo(ErrorCode.ACCOUNT_NEW_PASSWORD_SAME_AS_OLD);
+  }
+
+  @Test
+  void resetPassword_invalidToken_throws() {
+    when(jwtTokenProvider.parsePasswordResetToken("invalid-token"))
+        .thenThrow(new JwtException("Invalid token signature"));
+
+    assertThatThrownBy(
+            () -> service.resetPassword(new ResetPasswordRequest("invalid-token", "newPassword456")))
+        .isInstanceOf(BusinessException.class)
+        .extracting(ex -> ((BusinessException) ex).getErrorCode())
+        .isEqualTo(ErrorCode.ACCOUNT_INVALID_TOKEN);
   }
 }
 

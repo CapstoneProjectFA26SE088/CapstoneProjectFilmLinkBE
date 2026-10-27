@@ -1,15 +1,20 @@
 package com.fa26se088.filmlink.service.account;
 
 import com.fa26se088.filmlink.dto.account.request.ChangePasswordRequest;
+import com.fa26se088.filmlink.dto.account.request.ForgotPasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.RegisterRequest;
 import com.fa26se088.filmlink.dto.account.request.ResendOtpRequest;
+import com.fa26se088.filmlink.dto.account.request.ResetPasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.VerifyEmailRequest;
+import com.fa26se088.filmlink.dto.account.request.VerifyPasswordResetOtpRequest;
+import com.fa26se088.filmlink.dto.account.response.AccountNotificationPreferenceResponse;
+import com.fa26se088.filmlink.dto.account.response.PasswordResetTokenResponse;
 import com.fa26se088.filmlink.dto.account.response.AccountNotificationPreferenceResponse;
 import com.fa26se088.filmlink.dto.account.response.TokenResponse;
 import com.fa26se088.filmlink.dto.account.response.UserAccountResponse;
 import java.util.Optional;
 
-/** Vòng đời tài khoản: đăng ký Photographer, xác thực email, hồ sơ của chính mình (UC06), đổi mật khẩu (UC02). */
+/** Vòng đời tài khoản: đăng ký Photographer, xác thực email, hồ sơ của chính mình (UC06), đổi mật khẩu (UC02), quên mật khẩu (SCR-03). */
 public interface UserAccountService {
 
   /**
@@ -65,6 +70,40 @@ public interface UserAccountService {
    * @param request thông tin mật khẩu cũ và mật khẩu mới
    */
   void changePassword(Long accountId, ChangePasswordRequest request);
+
+  /**
+   * SCR-03 bước 1: yêu cầu gửi mã OTP đặt lại mật khẩu qua email.
+   *
+   * <p>Quy tắc bảo mật: phương thức không bao giờ tiết lộ email có tồn tại hay không. Dù email
+   * có tồn tại hay không trong hệ thống, client đều nhận cùng một phản hồi thành công. Nếu tài
+   * khoản tồn tại và đang hoạt động (ACTIVE), hệ thống sinh mã OTP lưu vào bảng {@code otp_codes}
+   * với mục đích {@code PASSWORD_RESET} và gửi email cho người dùng.
+   *
+   * @param request thông tin email cần đặt lại mật khẩu
+   */
+  void forgotPassword(ForgotPasswordRequest request);
+
+  /**
+   * SCR-03 bước 2: xác thực mã OTP đặt lại mật khẩu.
+   *
+   * <p>Kiểm tra mã OTP 6 số theo mục đích {@code PASSWORD_RESET}. Nếu hợp lệ, đánh dấu mã OTP đã
+   * sử dụng (consumed) và cấp token đặt lại mật khẩu (reset token) ngắn hạn (15 phút) cho bước 3.
+   *
+   * @param request thông tin email và mã OTP
+   * @return token đặt lại mật khẩu
+   */
+  PasswordResetTokenResponse verifyPasswordResetOtp(VerifyPasswordResetOtpRequest request);
+
+  /**
+   * SCR-03 bước 3: đặt mật khẩu mới bằng token xác thực nhận được từ bước 2.
+   *
+   * <p>Xác thực reset token, kiểm tra mật khẩu mới khác mật khẩu cũ, lưu mật khẩu mới đã băm
+   * BCrypt, thu hồi toàn bộ refresh token cũ của tài khoản, phát sự kiện gửi email cảnh báo bảo
+   * mật và ghi audit log.
+   *
+   * @param request thông tin token xác thực và mật khẩu mới
+   */
+  void resetPassword(ResetPasswordRequest request);
 
   /**
    * UC06 / FND-03: xoá hàng loạt tài khoản {@code PENDING_VERIFICATION} được tạo trước {@code
