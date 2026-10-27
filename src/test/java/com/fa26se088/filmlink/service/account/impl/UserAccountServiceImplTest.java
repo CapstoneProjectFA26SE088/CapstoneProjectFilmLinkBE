@@ -31,6 +31,7 @@ import com.fa26se088.filmlink.mapper.account.UserAccountMapper;
 import com.fa26se088.filmlink.repository.account.OtpCodeRepository;
 import com.fa26se088.filmlink.repository.account.UserAccountRepository;
 import com.fa26se088.filmlink.service.account.AuthenticationService;
+import com.fa26se088.filmlink.service.account.event.UserAccountPasswordChangedEvent;
 import com.fa26se088.filmlink.service.audit.AuditLogService;
 import java.time.Duration;
 import java.time.Instant;
@@ -44,6 +45,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -59,6 +61,7 @@ class UserAccountServiceImplTest {
   @Mock private EmailClient emailClient;
   @Mock private AuthenticationService authenticationService;
   @Mock private AuditLogService auditLogService;
+  @Mock private ApplicationEventPublisher eventPublisher;
 
   /** BCrypt thật (strength thấp cho nhanh) để kiểm hash OTP đúng như khi chạy thật. */
   private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder(4);
@@ -75,7 +78,8 @@ class UserAccountServiceImplTest {
             emailClient,
             authenticationService,
             new UserAccountMapper(),
-            auditLogService);
+            auditLogService,
+            eventPublisher);
   }
 
   // --- register (UC06, BR-01) ---
@@ -355,7 +359,7 @@ class UserAccountServiceImplTest {
   // --- changePassword (UC02) ---
 
   @Test
-  void changePassword_success_updatesHashRevokesTokensSendsEmailAndRecordsAudit() {
+  void changePassword_success_updatesHashRevokesTokensPublishesEventAndRecordsAudit() {
     UserAccount account = activeAccount("oldSecret123");
     when(userAccountRepository.findById(1L)).thenReturn(Optional.of(account));
 
@@ -364,11 +368,13 @@ class UserAccountServiceImplTest {
     assertThat(passwordEncoder.matches("newSecret456", account.getPasswordHash())).isTrue();
     verify(userAccountRepository).saveAndFlush(account);
     verify(authenticationService).revokeAllTokens(1L);
-    verify(emailClient)
-        .send(
-            eq(EMAIL),
-            eq("FilmLink - Cảnh báo bảo mật: Mật khẩu đã được thay đổi"),
-            anyString());
+
+    // Không gọi emailClient trực tiếp (trừ OTP), mà phát ApplicationEvent cho domain notification
+    verify(eventPublisher)
+        .publishEvent(
+            eq(new UserAccountPasswordChangedEvent(account.getId(), EMAIL, account.getFullName())));
+    verify(emailClient, never()).send(anyString(), anyString(), anyString());
+
     verify(auditLogService)
         .recordSuccess(
             argThat(
@@ -378,6 +384,48 @@ class UserAccountServiceImplTest {
                         && entry.targetId().equals(1L)
                         && entry.before() == null
                         && entry.after() == null));
+  }
+
+  // --- getNotificationPreference (UC04, R4) ---
+
+  @Test
+  void getNotificationPreference_found_returnsPreference() {
+    UserAccount account = activeAccount("secret");
+    account.setEmailNotificationEnabled(true);
+    account.setInAppNotificationEnabled(false);
+    account.setPushNotificationEnabled(true);
+    when(userAccountRepository.findById(1L)).thenReturn(Optional.of(account));
+
+    Optional<com.fa26se088.filmlink.dto.account.response.AccountNotificationPreferenceResponse> result =
+        service.getNotificationPreference(1L);
+
+    assertThat(result).isPresent();
+    var pref = result.get();
+    assertThat(pref.accountId()).isEqualTo(account.getId());
+    assertThat(pref.email()).isEqualTo(EMAIL);
+    assertThat(pref.fullName()).isEqualTo("Nguyen Van A");
+    assertThat(pref.emailNotificationEnabled()).isTrue();
+    assertThat(pref.inAppNotificationEnabled()).isFalse();
+    assertThat(pref.pushNotificationEnabled()).isTrue();
+    assertThat(pref.active()).isTrue();
+  }
+
+  @Test
+  void getNotificationPreference_notFound_returnsEmpty() {
+    when(userAccountRepository.findById(99L)).thenReturn(Optional.empty());
+
+    Optional<com.fa26se088.filmlink.dto.account.response.AccountNotificationPreferenceResponse> result =
+        service.getNotificationPreference(99L);
+
+    assertThat(result).isEmpty();
+  }
+
+  @Test
+  void getNotificationPreference_nullId_returnsEmpty() {
+    Optional<com.fa26se088.filmlink.dto.account.response.AccountNotificationPreferenceResponse> result =
+        service.getNotificationPreference(null);
+
+    assertThat(result).isEmpty();
   }
 
   @Test

@@ -5,6 +5,7 @@ import com.fa26se088.filmlink.dto.account.request.ChangePasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.RegisterRequest;
 import com.fa26se088.filmlink.dto.account.request.ResendOtpRequest;
 import com.fa26se088.filmlink.dto.account.request.VerifyEmailRequest;
+import com.fa26se088.filmlink.dto.account.response.AccountNotificationPreferenceResponse;
 import com.fa26se088.filmlink.dto.account.response.TokenResponse;
 import com.fa26se088.filmlink.dto.account.response.UserAccountResponse;
 import com.fa26se088.filmlink.dto.audit.request.AuditEntry;
@@ -22,6 +23,7 @@ import com.fa26se088.filmlink.repository.account.OtpCodeRepository;
 import com.fa26se088.filmlink.repository.account.UserAccountRepository;
 import com.fa26se088.filmlink.service.account.AuthenticationService;
 import com.fa26se088.filmlink.service.account.UserAccountService;
+import com.fa26se088.filmlink.service.account.event.UserAccountPasswordChangedEvent;
 import com.fa26se088.filmlink.service.audit.AuditLogService;
 import com.fa26se088.filmlink.utils.EmailUtils;
 import java.security.SecureRandom;
@@ -30,6 +32,7 @@ import java.time.Instant;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -68,6 +71,7 @@ public class UserAccountServiceImpl implements UserAccountService {
   private final AuthenticationService authenticationService;
   private final UserAccountMapper userAccountMapper;
   private final AuditLogService auditLogService;
+  private final ApplicationEventPublisher eventPublisher;
 
   /**
    * BR-01: tài khoản tự đăng ký luôn có role PHOTOGRAPHER, không nhận role từ request.
@@ -224,6 +228,30 @@ public class UserAccountServiceImpl implements UserAccountService {
   }
 
   /**
+   * UC04: Lấy cấu hình nhận thông báo của tài khoản để {@code NotificationService} kiểm tra
+   * cờ {@code is_email_notification_enabled} và lấy email theo quy tắc R4.
+   */
+  @Override
+  @Transactional(readOnly = true)
+  public Optional<AccountNotificationPreferenceResponse> getNotificationPreference(Long accountId) {
+    if (accountId == null) {
+      return Optional.empty();
+    }
+    return userAccountRepository
+        .findById(accountId)
+        .map(
+            account ->
+                new AccountNotificationPreferenceResponse(
+                    account.getId(),
+                    account.getEmail(),
+                    account.getFullName(),
+                    account.isEmailNotificationEnabled(),
+                    account.isInAppNotificationEnabled(),
+                    account.isPushNotificationEnabled(),
+                    account.getStatus() == UserAccountStatus.ACTIVE));
+  }
+
+  /**
    * UC02: đổi mật khẩu tài khoản.
    *
    * <ul>
@@ -235,7 +263,8 @@ public class UserAccountServiceImpl implements UserAccountService {
    *   <li>Lưu mật khẩu mới băm bằng BCrypt.
    *   <li>Thu hồi mọi refresh token qua {@link AuthenticationService#revokeAllTokens(Long)} để
    *       đăng xuất mọi phiên khác (dùng index {@code ix_refresh_tokens_active_by_account}).
-   *   <li>Gửi email cảnh báo bảo mật tới địa chỉ của tài khoản.
+   *   <li>Phát sự kiện {@link UserAccountPasswordChangedEvent} để domain notification gửi email cảnh
+   *       báo bảo mật sau khi commit transaction (không gọi {@link EmailClient} trực tiếp).
    *   <li>Ghi audit log SUCCESS (không chứa thông tin mật khẩu).
    * </ul>
    */
@@ -275,14 +304,10 @@ public class UserAccountServiceImpl implements UserAccountService {
 
     authenticationService.revokeAllTokens(accountId);
 
-    emailClient.send(
-        account.getEmail(),
-        "FilmLink - Cảnh báo bảo mật: Mật khẩu đã được thay đổi",
-        "Xin chào "
-            + account.getFullName()
-            + ",\n\nMật khẩu tài khoản FilmLink của bạn vừa được thay đổi thành công. "
-            + "Tất cả các phiên đăng nhập khác của bạn đã được đăng xuất để đảm bảo an toàn.\n\n"
-            + "Nếu bạn không thực hiện thay đổi này, vui lòng liên hệ ngay với quản trị viên để bảo vệ tài khoản.");
+    // Phát sự kiện để domain notification gửi email cảnh báo bảo mật sau khi transaction commit (AFTER_COMMIT)
+    eventPublisher.publishEvent(
+        new UserAccountPasswordChangedEvent(
+            account.getId(), account.getEmail(), account.getFullName()));
 
     auditLogService.recordSuccess(
         new AuditEntry(

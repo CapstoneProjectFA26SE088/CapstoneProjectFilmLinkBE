@@ -4,8 +4,10 @@ import com.fa26se088.filmlink.dto.account.request.ChangePasswordRequest;
 import com.fa26se088.filmlink.dto.account.request.RegisterRequest;
 import com.fa26se088.filmlink.dto.account.request.ResendOtpRequest;
 import com.fa26se088.filmlink.dto.account.request.VerifyEmailRequest;
+import com.fa26se088.filmlink.dto.account.response.AccountNotificationPreferenceResponse;
 import com.fa26se088.filmlink.dto.account.response.TokenResponse;
 import com.fa26se088.filmlink.dto.account.response.UserAccountResponse;
+import java.util.Optional;
 
 /** Vòng đời tài khoản: đăng ký Photographer, xác thực email, hồ sơ của chính mình (UC06), đổi mật khẩu (UC02). */
 public interface UserAccountService {
@@ -41,6 +43,17 @@ public interface UserAccountService {
 
   /** Thông tin tài khoản đang đăng nhập. */
   UserAccountResponse getCurrentAccount(Long accountId);
+
+  /**
+   * Lấy cấu hình nhận thông báo và thông tin người nhận của tài khoản (UC04).
+   *
+   * <p>Được {@code NotificationService} (domain notification) sử dụng để kiểm tra cờ {@code
+   * is_email_notification_enabled} và lấy địa chỉ email gửi thông báo theo quy tắc R4.
+   *
+   * @param accountId ID tài khoản
+   * @return cấu hình thông báo của tài khoản, hoặc {@link Optional#empty()} nếu không tìm thấy
+   */
+  Optional<AccountNotificationPreferenceResponse> getNotificationPreference(Long accountId);
 
   /**
    * UC02: đổi mật khẩu tài khoản.
