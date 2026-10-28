@@ -89,3 +89,15 @@ springdoc:
   swagger-ui:
     enabled: ${SWAGGER_ENABLED:true}
     path: /swagger-ui.html
+delivery:
+  default-provider: ghn
+
+  ghn:
+    enabled: true
+    name: active
+    base-url: https://dev-online-gateway.ghn.vn
+    token: ${GHN_TOKEN}
+    shop-id: ${GHN_SHOP_ID}
+    webhook:
+      secret: ${GHN_WEBHOOK_SECRET}
+      # Bắt buộc phải có, dùng để xác thực webhook từ GHN. Không có giá trị mặc định.

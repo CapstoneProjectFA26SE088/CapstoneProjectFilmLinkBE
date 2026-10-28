@@ -120,3 +120,4 @@ CREATE TABLE film_handover_photos (
 CREATE TRIGGER film_handover_photos_append_only
     BEFORE UPDATE OR DELETE ON film_handover_photos
     FOR EACH ROW EXECUTE FUNCTION trg_append_only();
+
